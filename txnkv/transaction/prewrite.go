@@ -189,7 +189,12 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					zap.Uint64("txnStartTS", c.startTS))
 				return errors.New("injected error on prewriting secondary batch")
 			}
-			util.EvalFailpoint("prewriteSecondary") // for other failures like sleep or pause
+			if c.isPessimistic {
+				if _, err := util.EvalFailpoint("prewriteSecondary"); err == nil { // for other failures like sleep or pause
+					logutil.Logger(bo.GetCtx()).Info("[failpoint] prewrite Secondary",
+						zap.Uint64("txnStartTS", c.startTS))
+				}
+			}
 		}
 	}
 
@@ -222,7 +227,12 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			logutil.BgLogger().Warn("slow prewrite request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
 			tBegin = time.Now()
 		}
-
+		keys := make([]string, 0, len(batch.mutations.GetKeys()))
+		for _, key := range batch.mutations.GetKeys() {
+			keys = append(keys, hex.EncodeToString(key))
+		}
+		logutil.BgLogger().Info("send prewrite request to TiKV", zap.Uint64("startTS", c.startTS),
+			zap.Uint64("region id", batch.region.GetID()), zap.Int("attempts", attempts), zap.Any("keys", keys))
 		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// Unexpected error occurs, return it
 		if err != nil {

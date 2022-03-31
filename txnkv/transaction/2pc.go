@@ -1837,7 +1837,7 @@ func (c *twoPhaseCommitter) calculateMaxCommitTS(ctx context.Context) error {
 	}
 
 	safeWindow := config.GetGlobalConfig().TiKVClient.AsyncCommit.SafeWindow
-	maxCommitTS := oracle.ComposeTS(int64(safeWindow/time.Millisecond), 0) + currentTS
+	maxCommitTS := oracle.ComposeTS(40*1000, 0) + currentTS
 	logutil.BgLogger().Debug("calculate MaxCommitTS",
 		zap.Time("startTime", c.txn.startTime),
 		zap.Duration("safeWindow", safeWindow),
