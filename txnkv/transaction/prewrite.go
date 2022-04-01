@@ -189,12 +189,14 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					zap.Uint64("txnStartTS", c.startTS))
 				return errors.New("injected error on prewriting secondary batch")
 			}
-			if c.isPessimistic {
-				if _, err := util.EvalFailpoint("prewriteSecondary"); err == nil { // for other failures like sleep or pause
-					logutil.Logger(bo.GetCtx()).Info("[failpoint] prewrite Secondary",
-						zap.Uint64("txnStartTS", c.startTS))
-				}
+			logutil.Logger(bo.GetCtx()).Info("before failpoint prewrite Secondary",
+				zap.Uint64("txnStartTS", c.startTS))
+			if _, err := util.EvalFailpoint("prewriteSecondary"); err == nil { // for other failures like sleep or pause
+				logutil.Logger(bo.GetCtx()).Info("[failpoint] prewrite Secondary",
+					zap.Uint64("txnStartTS", c.startTS))
 			}
+			logutil.Logger(bo.GetCtx()).Info("after failpoint prewrite Secondary",
+				zap.Uint64("txnStartTS", c.startTS))
 		}
 	}
 
