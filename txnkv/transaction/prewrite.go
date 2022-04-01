@@ -191,6 +191,9 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			}
 			logutil.Logger(bo.GetCtx()).Info("before failpoint prewrite Secondary",
 				zap.Uint64("txnStartTS", c.startTS))
+			if val, err := util.EvalFailpoint("prewriteSecondarySleep"); err == nil {
+				time.Sleep(time.Millisecond * time.Duration(val.(int)))
+			}
 			if _, err := util.EvalFailpoint("prewriteSecondary"); err == nil { // for other failures like sleep or pause
 				logutil.Logger(bo.GetCtx()).Info("[failpoint] prewrite Secondary",
 					zap.Uint64("txnStartTS", c.startTS))
