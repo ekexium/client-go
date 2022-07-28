@@ -596,6 +596,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// it before initiating an RPC request.
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
+
+	if lockCtx.LockIfExists && !lockCtx.ReturnValues {
+		return errors.New("If LockIfExists flag was set in TiDB, ReturnValues must be set too")
+	}
+
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
 	// Exclude keys that are already locked.
 	var err error
@@ -674,10 +679,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
 		}
-
-		lockCtx.Stats = &util.LockKeysDetails{
-			LockKeys:    int32(len(keys)),
-			ResolveLock: util.ResolveLockDetail{},
+		if lockCtx.LockStatsOn {
+			lockCtx.Stats = &util.LockKeysDetails{
+				LockKeys:    int32(len(keys)),
+				ResolveLock: util.ResolveLockDetail{},
+			}
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
@@ -685,7 +691,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
 		err = txn.committer.pessimisticLockMutations(bo, lockCtx, &PlainMutations{keys: keys})
-		if bo.GetTotalSleep() > 0 {
+		if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
 			lockCtx.Stats.Mu.BackoffTypes = append(lockCtx.Stats.Mu.BackoffTypes, bo.GetTypes()...)
@@ -755,6 +761,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 				if !val.Exists {
 					valExists = tikv.SetKeyLockedValueNotExists
+					// lockCtx.LockIfExists = true means lockCtx.ReturnValues = true definitely
+					if lockCtx.LockIfExists {
+						continue
+					}
 				}
 			}
 		}
@@ -766,6 +776,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
 func deduplicateKeys(keys [][]byte) [][]byte {
+	if len(keys) == 1 {
+		return keys
+	}
+
 	sort.Slice(keys, func(i, j int) bool {
 		return bytes.Compare(keys[i], keys[j]) < 0
 	})

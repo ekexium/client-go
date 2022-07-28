@@ -106,6 +106,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ReturnValues:   action.ReturnValues,
 		CheckExistence: action.CheckExistence,
 		MinCommitTs:    c.forUpdateTS + 1,
+		LockIfExists:   action.LockIfExists,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
@@ -185,7 +186,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
 		keyErrs := lockResp.GetErrors()
 		if len(keyErrs) == 0 {
-			action.LockCtx.Stats.MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+			if action.LockCtx.Stats != nil {
+				action.LockCtx.Stats.MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+			}
 
 			if batch.isPrimary {
 				// After locking the primary key, we should protect the primary lock from expiring
@@ -245,7 +248,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		resolveLockOpts := txnlock.ResolveLocksOptions{
 			CallerStartTS: 0,
 			Locks:         locks,
-			Detail:        &action.LockCtx.Stats.ResolveLock,
+		}
+		if action.LockCtx.Stats != nil {
+			resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
