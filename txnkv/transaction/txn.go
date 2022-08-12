@@ -762,9 +762,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				if !val.Exists {
 					valExists = tikv.SetKeyLockedValueNotExists
 					// lockCtx.LockIfExists = true means lockCtx.ReturnValues = true definitely
-					if lockCtx.LockIfExists {
-						continue
-					}
+					// if lockCtx.LockIfExists {
+					//	continue
+					// }
 				}
 			}
 		}
