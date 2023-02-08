@@ -657,6 +657,7 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 // (kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock).
 func (txn *KVTxn) StartAggressiveLocking() {
 	if txn.aggressiveLockingContext != nil {
+		logutil.BgLogger().Error("Trying to start aggressive locking while it's already started", zap.Stack("stack"))
 		panic("Trying to start aggressive locking while it's already started")
 	}
 	txn.aggressiveLockingContext = &aggressiveLockingContext{
