@@ -270,11 +270,13 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		// Do not resolve the lock if the lock was recently updated which indicates the txn holding the lock is
 		// much likely alive.
 		// This should only happen for wait timeout.
-		if lockInfo := keyErr.GetLocked(); lockInfo != nil &&
-			lockInfo.DurationToLastUpdateMs > 0 &&
-			lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
-			metrics.SkippedTimeoutLocks.Inc()
-			continue
+		if lockInfo := keyErr.GetLocked(); lockInfo != nil {
+			metrics.TiKVDurationToLastUpdate.Observe(float64(lockInfo.DurationToLastUpdateMs))
+			if lockInfo.DurationToLastUpdateMs > 0 &&
+				lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+				metrics.SkippedTimeoutLocks.Inc()
+				continue
+			}
 		}
 
 		// Extract lock from key error

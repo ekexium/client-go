@@ -100,7 +100,8 @@ var (
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
-	TiKVDebugLockErrorCounter                *prometheus.CounterVec
+	TiKVDebugLockErrorCounter *prometheus.CounterVec
+	TiKVDurationToLastUpdate  prometheus.Histogram
 )
 
 // Label constants.
@@ -697,6 +698,15 @@ func initMetrics(namespace, subsystem string) {
 		}, []string{LblType},
 	)
 
+	TiKVDurationToLastUpdate = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "duration_to_update",
+			Help:      "Bucketed histogram of the duration to update heatmap.",
+		},
+	)
+
 	initShortcuts()
 }
 
@@ -772,6 +782,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
 	prometheus.MustRegister(TiKVDebugLockErrorCounter)
+	prometheus.MustRegister(TiKVDurationToLastUpdate)
 }
 
 // readCounter reads the value of a prometheus.Counter.
