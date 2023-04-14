@@ -450,6 +450,7 @@ func (action actionPrewrite) handleSingleBatch(
 			}
 			locks = append(locks, lock)
 		}
+		metrics.PrewriteResolve.Inc()
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
 			resolvingRecordToken = &token

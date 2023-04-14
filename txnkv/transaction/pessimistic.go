@@ -273,6 +273,7 @@ func (action actionPessimisticLock) handleKeyErrorForResolve(
 		if lockInfo := keyErr.GetLocked(); lockInfo != nil &&
 			lockInfo.DurationToLastUpdateMs > 0 &&
 			lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+			metrics.SkippedTimeoutLocks.Inc()
 			continue
 		}
 
@@ -293,6 +294,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation,
 	resp *tikvrpc.Response, diagCtx *diagnosticContext,
 ) (finished bool, err error) {
+	metrics.NormalLockMode.Inc()
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
@@ -357,6 +359,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		return false, nil
 	}
 
+	metrics.NormalLockModeResolve.Inc()
 	// Because we already waited on tikv, no need to Backoff here.
 	// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 	if diagCtx.resolvingRecordToken == nil {
@@ -402,6 +405,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation,
 	resp *tikvrpc.Response, diagCtx *diagnosticContext,
 ) (finished bool, err error) {
+	metrics.ForceLockMode.Inc()
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
@@ -485,6 +489,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 
 	if isMutationFailed {
 		if len(locks) > 0 {
+			metrics.ForceLockModeResolve.Inc()
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 			if diagCtx.resolvingRecordToken == nil {

@@ -159,6 +159,13 @@ var (
 	AggressiveLockedKeysDerived            prometheus.Counter
 	AggressiveLockedKeysLockedWithConflict prometheus.Counter
 	AggressiveLockedKeysNonForceLock       prometheus.Counter
+
+	ForceLockMode         prometheus.Counter
+	NormalLockMode        prometheus.Counter
+	ForceLockModeResolve  prometheus.Counter
+	NormalLockModeResolve prometheus.Counter
+	SkippedTimeoutLocks   prometheus.Counter
+	PrewriteResolve       prometheus.Counter
 )
 
 func initShortcuts() {
@@ -206,14 +213,35 @@ func initShortcuts() {
 	TxnRegionsNumHistogramCommit = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_commit", LblGeneral)
 	TxnRegionsNumHistogramCleanupInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_cleanup", LblInternal)
 	TxnRegionsNumHistogramCleanup = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_cleanup", LblGeneral)
-	TxnRegionsNumHistogramPessimisticLockInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock", LblInternal)
-	TxnRegionsNumHistogramPessimisticLock = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock", LblGeneral)
-	TxnRegionsNumHistogramPessimisticRollbackInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblInternal)
-	TxnRegionsNumHistogramPessimisticRollback = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblGeneral)
-	TxnRegionsNumHistogramWithCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
+	TxnRegionsNumHistogramPessimisticLockInternal = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"2pc_pessimistic_lock",
+		LblInternal,
+	)
+	TxnRegionsNumHistogramPessimisticLock = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"2pc_pessimistic_lock",
+		LblGeneral,
+	)
+	TxnRegionsNumHistogramPessimisticRollbackInternal = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"2pc_pessimistic_rollback",
+		LblInternal,
+	)
+	TxnRegionsNumHistogramPessimisticRollback = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"2pc_pessimistic_rollback",
+		LblGeneral,
+	)
+	TxnRegionsNumHistogramWithCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"coprocessor",
+		LblInternal,
+	)
 	TxnRegionsNumHistogramWithCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
-	TxnRegionsNumHistogramWithBatchCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
-	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
+	TxnRegionsNumHistogramWithBatchCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"coprocessor",
+		LblInternal,
+	)
+	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues(
+		"batch_coprocessor",
+		LblGeneral,
+	)
 	TxnWriteKVCountHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
 	TxnWriteKVCountHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
 	TxnWriteSizeHistogramInternal = TiKVTxnWriteSizeHistogram.WithLabelValues(LblInternal)
@@ -234,7 +262,10 @@ func initShortcuts() {
 	LockResolverCountWithResolveLocks = TiKVLockResolverCounter.WithLabelValues("query_resolve_locks")
 	LockResolverCountWithResolveLockLite = TiKVLockResolverCounter.WithLabelValues("query_resolve_lock_lite")
 
-	RegionCacheCounterWithInvalidateRegionFromCacheOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_region_from_cache", "ok")
+	RegionCacheCounterWithInvalidateRegionFromCacheOK = TiKVRegionCacheCounter.WithLabelValues(
+		"invalidate_region_from_cache",
+		"ok",
+	)
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")
 	RegionCacheCounterWithGetRegionByIDOK = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "ok")
 	RegionCacheCounterWithGetRegionByIDError = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "err")
@@ -244,7 +275,10 @@ func initShortcuts() {
 	RegionCacheCounterWithScanRegionsError = TiKVRegionCacheCounter.WithLabelValues("scan_regions", "err")
 	RegionCacheCounterWithGetStoreOK = TiKVRegionCacheCounter.WithLabelValues("get_store", "ok")
 	RegionCacheCounterWithGetStoreError = TiKVRegionCacheCounter.WithLabelValues("get_store", "err")
-	RegionCacheCounterWithInvalidateStoreRegionsOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_store_regions", "ok")
+	RegionCacheCounterWithInvalidateStoreRegionsOK = TiKVRegionCacheCounter.WithLabelValues(
+		"invalidate_store_regions",
+		"ok",
+	)
 
 	LoadRegionCacheHistogramWhenCacheMiss = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_when_miss")
 	LoadRegionCacheHistogramWithRegionByID = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_by_id")
@@ -290,4 +324,11 @@ func initShortcuts() {
 	// `WakeUpMode = PessimisticLockWakeUpMode_WakeUpModeNormal`, which will disable `allow_lock_with_conflict` in
 	// TiKV).
 	AggressiveLockedKeysNonForceLock = TiKVAggressiveLockedKeysCounter.WithLabelValues("non_force_lock")
+
+	ForceLockMode = TiKVDebugLockErrorCounter.WithLabelValues("force_lock_mode")
+	ForceLockModeResolve = TiKVDebugLockErrorCounter.WithLabelValues("force_lock_mode_resolve")
+	NormalLockMode = TiKVDebugLockErrorCounter.WithLabelValues("normal_lock_mode")
+	NormalLockModeResolve = TiKVDebugLockErrorCounter.WithLabelValues("normal_lock_mode_resolve")
+	SkippedTimeoutLocks = TiKVDebugLockErrorCounter.WithLabelValues("skipped_timeout_locks")
+	PrewriteResolve = TiKVDebugLockErrorCounter.WithLabelValues("prewrite_resolve")
 }
