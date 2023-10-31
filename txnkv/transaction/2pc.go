@@ -543,7 +543,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
 	txn := c.txn
-	memBuf := txn.GetMemBuffer()
+	memBuf := txn.GetMemBuffer().(*unionstore.MemDB)
 	sizeHint := txn.us.GetMemBuffer().Len()
 	c.mutations = newMemBufferMutations(sizeHint, memBuf)
 	c.isPessimistic = txn.IsPessimistic()

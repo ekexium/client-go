@@ -168,7 +168,8 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
-		us:                unionstore.NewUnionStore(snapshot),
+		// us:                unionstore.NewUnionStoreWithMemDB(snapshot),
+		us: unionstore.NewUnionStoreWithTikvBuffer(snapshot),
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),
@@ -1426,7 +1427,7 @@ func (txn *KVTxn) GetUnionStore() *unionstore.KVUnionStore {
 }
 
 // GetMemBuffer return the MemBuffer binding to this transaction.
-func (txn *KVTxn) GetMemBuffer() *unionstore.MemDB {
+func (txn *KVTxn) GetMemBuffer() unionstore.Buffer {
 	return txn.us.GetMemBuffer()
 }
 

@@ -75,23 +75,66 @@ type uSnapshot interface {
 	IterReverse(k, lowerBound []byte) (Iterator, error)
 }
 
+type Buffer interface {
+	Staging() int
+	Release(h int)
+	Cleanup(h int)
+	Checkpoint() *MemDBCheckpoint
+	RevertToCheckpoint(cp *MemDBCheckpoint)
+	Reset()
+	DiscardValues()
+	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
+	Get(key []byte) ([]byte, error)
+	SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error)
+	GetFlags(key []byte) (kv.KeyFlags, error)
+	UpdateFlags(key []byte, ops ...kv.FlagsOp)
+	Set(key []byte, value []byte) error
+	SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error
+	Delete(key []byte) error
+	DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error
+	GetKeyByHandle(handle MemKeyHandle) []byte
+	GetValueByHandle(handle MemKeyHandle) ([]byte, bool)
+	Len() int
+	Size() int
+	Dirty() bool
+	RemoveFromBuffer(key []byte)
+	SetMemoryFootprintChangeHook(hook func(uint64))
+	Mem() uint64
+	SetEntrySizeLimit(entryLimit, bufferLimit uint64)
+	Iter(k, upperBound []byte) (Iterator, error)
+	IterReverse(k, lowerBound []byte) (Iterator, error)
+	IterWithFlags(k []byte, upperBound []byte) *MemdbIterator
+	RLock()
+	RUnlock()
+}
+
+var _ Buffer = (*MemDB)(nil)
+var _ Buffer = (*TikvBuffer)(nil)
+
 // KVUnionStore is an in-memory Store which contains a buffer for write and a
 // snapshot for read.
 type KVUnionStore struct {
-	memBuffer *MemDB
+	memBuffer Buffer
 	snapshot  uSnapshot
 }
 
-// NewUnionStore builds a new unionStore.
-func NewUnionStore(snapshot uSnapshot) *KVUnionStore {
+// NewUnionStoreWithMemDB builds a new unionStore.
+func NewUnionStoreWithMemDB(snapshot uSnapshot) *KVUnionStore {
 	return &KVUnionStore{
 		snapshot:  snapshot,
 		memBuffer: newMemDB(),
 	}
 }
 
+func NewUnionStoreWithTikvBuffer(snapshot uSnapshot) *KVUnionStore {
+	return &KVUnionStore{
+		snapshot:  snapshot,
+		memBuffer: newTikvBuffer(),
+	}
+}
+
 // GetMemBuffer return the MemBuffer binding to this unionStore.
-func (us *KVUnionStore) GetMemBuffer() *MemDB {
+func (us *KVUnionStore) GetMemBuffer() Buffer {
 	return us.memBuffer
 }
 
@@ -152,6 +195,5 @@ func (us *KVUnionStore) UnmarkPresumeKeyNotExists(k []byte) {
 
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
 func (us *KVUnionStore) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
-	us.memBuffer.entrySizeLimit = entryLimit
-	us.memBuffer.bufferSizeLimit = bufferLimit
+	us.memBuffer.SetEntrySizeLimit(entryLimit, bufferLimit)
 }

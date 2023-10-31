@@ -882,3 +882,9 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 func (db *MemDB) Mem() uint64 {
 	return db.allocator.capacity + db.vlog.capacity
 }
+
+// SetEntrySizeLimit sets the entry size limit and buffer size limit.
+func (db *MemDB) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
+	db.entrySizeLimit = entryLimit
+	db.bufferSizeLimit = bufferLimit
+}
