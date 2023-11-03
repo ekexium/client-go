@@ -90,7 +90,7 @@ var (
 	CommitMaxBackoff = uint64(40000)
 )
 
-type kvstore interface {
+type KvStore interface {
 	// GetRegionCache gets the RegionCache.
 	GetRegionCache() *locate.RegionCache
 	// SplitRegions splits regions by splitKeys.
@@ -123,8 +123,8 @@ type kvstore interface {
 
 // twoPhaseCommitter executes a two-phase commit protocol.
 type twoPhaseCommitter struct {
-	store               kvstore
-	txn                 *KVTxn
+	store KvStore
+	txn   *KVTxn
 	startTS             uint64
 	mutations           *memBufferMutations
 	lockTTL             uint64
@@ -1217,7 +1217,7 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 	}
 }
 
-func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
+func sendTxnHeartBeat(bo *retry.Backoffer, store KvStore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,

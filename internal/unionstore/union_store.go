@@ -126,10 +126,10 @@ func NewUnionStoreWithMemDB(snapshot uSnapshot) *KVUnionStore {
 	}
 }
 
-func NewUnionStoreWithTikvBuffer(snapshot uSnapshot) *KVUnionStore {
+func NewUnionStoreWithTikvBuffer(snapshot uSnapshot, store store) *KVUnionStore {
 	return &KVUnionStore{
 		snapshot:  snapshot,
-		memBuffer: newTikvBuffer(),
+		memBuffer: newTikvBuffer(store),
 	}
 }
 

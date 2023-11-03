@@ -370,7 +370,9 @@ func (c CommitterProbe) CleanupMutations(ctx context.Context) error {
 }
 
 // SendTxnHeartBeat renews a txn's ttl.
-func SendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
+func SendTxnHeartBeat(bo *retry.Backoffer, store KvStore, primary []byte, startTS, ttl uint64) (
+	newTTL uint64, stopHeartBeat bool, err error,
+) {
 	return sendTxnHeartBeat(bo, store, primary, startTS, ttl)
 }
 

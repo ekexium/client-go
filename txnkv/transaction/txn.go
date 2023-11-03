@@ -118,7 +118,7 @@ type TxnOptions struct {
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
 	us        *unionstore.KVUnionStore
-	store     kvstore // for connection to region.
+	store     KvStore // for connection to region.
 	startTS   uint64
 	startTime time.Time // Monotonic timestamp for recording txn time consuming.
 	commitTS  uint64
@@ -164,12 +164,12 @@ type KVTxn struct {
 }
 
 // NewTiKVTxn creates a new KVTxn.
-func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
+func NewTiKVTxn(store KvStore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
 		// us:                unionstore.NewUnionStoreWithMemDB(snapshot),
-		us: unionstore.NewUnionStoreWithTikvBuffer(snapshot),
+		us: unionstore.NewUnionStoreWithTikvBuffer(snapshot, store),
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),

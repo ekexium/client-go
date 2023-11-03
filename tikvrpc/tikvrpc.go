@@ -74,6 +74,8 @@ const (
 	CmdCheckSecondaryLocks
 	CmdFlashbackToVersion
 	CmdPrepareFlashbackToVersion
+	CmdMemBufferSet
+	CmdMemBufferGet
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet
@@ -208,6 +210,10 @@ func (t CmdType) String() string {
 		return "LockWaitInfo"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
+	case CmdMemBufferSet:
+		return "MemBufferSet"
+	case CmdMemBufferGet:
+		return "MemBufferGet"
 	case CmdPrepareFlashbackToVersion:
 		return "PrepareFlashbackToVersion"
 	case CmdGetTiFlashSystemTable:
@@ -545,6 +551,14 @@ func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
 // PrepareFlashbackToVersion returns PrepareFlashbackToVersion in request.
 func (req *Request) PrepareFlashbackToVersion() *kvrpcpb.PrepareFlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.PrepareFlashbackToVersionRequest)
+}
+
+func (req *Request) MemBufferSet() *kvrpcpb.MemBufferSetRequest {
+	return req.Req.(*kvrpcpb.MemBufferSetRequest)
+}
+
+func (req *Request) MemBufferGet() *kvrpcpb.MemBufferGetRequest {
+	return req.Req.(*kvrpcpb.MemBufferGetRequest)
 }
 
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
@@ -971,6 +985,14 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.PrepareFlashbackToVersionResponse{
 			RegionError: e,
 		}
+	case CmdMemBufferSet:
+		p = &kvrpcpb.MemBufferSetResponse{
+			RegionError: e,
+		}
+	case CmdMemBufferGet:
+		p = &kvrpcpb.MemBufferGetResponse{
+			RegionError: e,
+		}
 	default:
 		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
@@ -1129,6 +1151,10 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvFlashbackToVersion(ctx, req.FlashbackToVersion())
 	case CmdPrepareFlashbackToVersion:
 		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
+	case CmdMemBufferSet:
+		resp.Resp, err = client.KvMemBufferSet(ctx, req.MemBufferSet())
+	case CmdMemBufferGet:
+		resp.Resp, err = client.KvMemBufferGet(ctx, req.MemBufferGet())
 	case CmdGetTiFlashSystemTable:
 		resp.Resp, err = client.GetTiFlashSystemTable(ctx, req.GetTiFlashSystemTable())
 	default:
@@ -1294,7 +1320,8 @@ func (req *Request) IsTxnWriteRequest() bool {
 		req.Type == CmdTxnHeartBeat ||
 		req.Type == CmdResolveLock ||
 		req.Type == CmdFlashbackToVersion ||
-		req.Type == CmdPrepareFlashbackToVersion {
+		req.Type == CmdPrepareFlashbackToVersion ||
+		req.Type == CmdMemBufferSet {
 		return true
 	}
 	return false
@@ -1348,6 +1375,10 @@ func (req *Request) GetStartTS() uint64 {
 		return req.FlashbackToVersion().GetStartTs()
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdMemBufferSet:
+		req.MemBufferSet().GetStartTs()
+	case CmdMemBufferGet:
+		req.MemBufferGet().GetStartTs()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:
