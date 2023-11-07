@@ -16,8 +16,8 @@ package txnsnapshot
 
 import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/internal_/locate"
+	"github.com/tikv/client-go/v2/internal_/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 

@@ -38,9 +38,9 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/internal/apicodec"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal_/apicodec"
+	"github.com/tikv/client-go/v2/internal_/client"
+	"github.com/tikv/client-go/v2/internal_/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )

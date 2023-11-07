@@ -37,7 +37,7 @@ package tikv
 import (
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal_/locate"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"

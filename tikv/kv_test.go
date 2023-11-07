@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/internal_/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"

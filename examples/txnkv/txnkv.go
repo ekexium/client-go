@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tikv/client-go/v2/internal_/unionstore"
 	"github.com/tikv/client-go/v2/txnkv"
 )
 
@@ -116,30 +117,16 @@ func main() {
 	flag.Parse()
 	initStore()
 
-	// set
-	err := puts([]byte("key1"), []byte("value1"), []byte("key2"), []byte("value2"))
+	txn, err := client.Begin()
 	if err != nil {
 		panic(err)
 	}
-
-	// get
-	kv, err := get([]byte("key1"))
+	buffer := txn.GetMemBuffer().(*unionstore.TikvBuffer)
+	err = buffer.Set([]byte("a"), []byte("1"))
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(kv)
-
-	// scan
-	ret, err := scan([]byte("key"), 10)
-	if err != nil {
-		panic(err)
-	}
-	for _, kv := range ret {
-		fmt.Println(kv)
-	}
-
-	// delete
-	err = dels([]byte("key1"), []byte("key2"))
+	err = buffer.Commit()
 	if err != nil {
 		panic(err)
 	}

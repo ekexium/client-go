@@ -38,7 +38,7 @@ import (
 	"context"
 
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/internal_/unionstore"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
