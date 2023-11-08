@@ -791,6 +791,10 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 		req.Cop().Context = ctx
 	case CmdBatchCop:
 		req.BatchCop().Context = ctx
+	case CmdMemBufferGet:
+		req.MemBufferGet().Context = ctx
+	case CmdMemBufferSet:
+		req.MemBufferSet().Context = ctx
 	// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
 	case CmdMPPTask:
 	case CmdMPPConn:

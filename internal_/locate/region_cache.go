@@ -1999,6 +1999,7 @@ func (c *RegionCache) OnBucketVersionNotMatch(ctx *RPCContext, version uint64, k
 func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext, currentRegions []*metapb.Region) (bool, error) {
 	if len(currentRegions) == 0 {
 		c.InvalidateCachedRegionWithReason(ctx.Region, EpochNotMatch)
+		println(time.Now().String(), "no currentRegions")
 		return false, nil
 	}
 
@@ -2029,6 +2030,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 		// carry buckets information. Can it bring much overhead?
 		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})
 		if err != nil {
+			println(time.Now().String(), "newRegion error")
 			return false, err
 		}
 		var initLeaderStoreID uint64

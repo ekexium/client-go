@@ -15,10 +15,10 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/tikv/client-go/v2/internal_/unionstore"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -47,68 +47,6 @@ func initStore() {
 	}
 }
 
-// key1 val1 key2 val2 ...
-func puts(args ...[]byte) error {
-	tx, err := client.Begin()
-	if err != nil {
-		return err
-	}
-
-	for i := 0; i < len(args); i += 2 {
-		key, val := args[i], args[i+1]
-		err := tx.Set(key, val)
-		if err != nil {
-			return err
-		}
-	}
-	return tx.Commit(context.Background())
-}
-
-func get(k []byte) (KV, error) {
-	tx, err := client.Begin()
-	if err != nil {
-		return KV{}, err
-	}
-	v, err := tx.Get(context.TODO(), k)
-	if err != nil {
-		return KV{}, err
-	}
-	return KV{K: k, V: v}, nil
-}
-
-func dels(keys ...[]byte) error {
-	tx, err := client.Begin()
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		err := tx.Delete(key)
-		if err != nil {
-			return err
-		}
-	}
-	return tx.Commit(context.Background())
-}
-
-func scan(keyPrefix []byte, limit int) ([]KV, error) {
-	tx, err := client.Begin()
-	if err != nil {
-		return nil, err
-	}
-	it, err := tx.Iter(keyPrefix, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer it.Close()
-	var ret []KV
-	for it.Valid() && limit > 0 {
-		ret = append(ret, KV{K: it.Key()[:], V: it.Value()[:]})
-		limit--
-		it.Next()
-	}
-	return ret, nil
-}
-
 func main() {
 	pdAddr := os.Getenv("PD_ADDR")
 	if pdAddr != "" {
@@ -122,11 +60,23 @@ func main() {
 		panic(err)
 	}
 	buffer := txn.GetMemBuffer().(*unionstore.TikvBuffer)
-	err = buffer.Set([]byte("a"), []byte("1"))
-	if err != nil {
-		panic(err)
+
+	// make a 1 kb value
+	value := make([]byte, 1024)
+	for i := 0; i < 100_000_000; i++ {
+		if i%100000 == 0 {
+			println(time.Now().String(), i)
+		}
+		key := []byte(fmt.Sprintf("exp17_%d", i))
+		err = buffer.Set(key, value)
+		if err != nil {
+			panic(err)
+		}
 	}
+
+	println(time.Now().String(), "before commit")
 	err = buffer.Commit()
+	println(time.Now().String(), "after commit")
 	if err != nil {
 		panic(err)
 	}

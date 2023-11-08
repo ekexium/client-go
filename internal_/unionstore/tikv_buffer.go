@@ -39,16 +39,19 @@ import (
 	"context"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal_/locate"
+	"github.com/tikv/client-go/v2/internal_/logutil"
 	"github.com/tikv/client-go/v2/internal_/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
 )
 
 type store interface {
@@ -76,9 +79,12 @@ type TikvBuffer struct {
 	spkCounter           int
 }
 
-func newTikvBuffer(store store) *TikvBuffer {
+func newTikvBuffer(startTS uint64, store store) *TikvBuffer {
 	return &TikvBuffer{
-		store: store,
+		store:                store,
+		startTs:              startTS,
+		buffer:               make(map[string]flagsAndValue),
+		secondaryPrimaryKeys: make(map[string]struct{}),
 	}
 }
 
@@ -146,15 +152,30 @@ func (b *TikvBuffer) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte
 
 func (b *TikvBuffer) Get(key []byte) ([]byte, error) {
 	if v, ok := b.buffer[string(key)]; ok {
+		// println("get from memory")
 		return v.value, nil
 	}
+	return b.getFromTiKV(key)
+}
+
+func (b *TikvBuffer) getFromTiKV(key []byte) ([]byte, error) {
+	var v []byte
+	f := func() error {
+		var err error
+		v, err = b.doGetFromTiKV(key)
+		return err
+	}
+	return v, withRetry(f)
+}
+
+func (b *TikvBuffer) doGetFromTiKV(key []byte) ([]byte, error) {
 	memBufferGetReq := tikvrpc.NewRequest(
 		tikvrpc.CmdMemBufferGet, &kvrpcpb.MemBufferGetRequest{
 			StartTs: b.startTs,
 			Key:     key,
 		},
 	)
-	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
+	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
 	region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), key)
 	if err != nil {
 		return nil, err
@@ -195,24 +216,46 @@ func (b *TikvBuffer) maybeFlush() error {
 	if len(b.buffer) < 2048 {
 		return nil
 	}
-	return b.flush()
+	return b.Flush()
 }
 
-func (b *TikvBuffer) flush() (err error) {
+func (b *TikvBuffer) Flush() (err error) {
+	return withRetry(b.doFlush)
+}
+
+func withRetry(f func() error) (err error) {
+	tryTimes := 0
+	for {
+		tryTimes++
+		err = f()
+		if err == nil {
+			return nil
+		}
+		if tryTimes > 20 {
+			logutil.BgLogger().Error("retry fails", zap.Error(err))
+			return err
+		} else {
+			logutil.BgLogger().Warn("retrying", zap.Error(err))
+		}
+		time.Sleep(time.Millisecond * 500)
+	}
+}
+
+func (b *TikvBuffer) doFlush() (err error) {
 	if len(b.primary) == 0 {
 		return nil
 	}
 
 	if b.startTs == 0 {
-		var err error
-		b.startTs, err = b.store.GetOracle().GetTimestamp(nil, nil)
-		if err != nil {
-			return err
-		}
+		return errors.New("start ts can't be 0")
+	}
+
+	if len(b.buffer) == 0 {
+		return nil
 	}
 
 	// create a spk
-	keys := make([][]byte, len(b.buffer))
+	keys := make([][]byte, 0, len(b.buffer))
 	for k := range b.buffer {
 		keys = append(keys, []byte(k))
 	}
@@ -220,14 +263,16 @@ func (b *TikvBuffer) flush() (err error) {
 	if err != nil {
 		return err
 	}
+	// fmt.Printf("encoded, keys=%v, buffer=%v\n", keys, b.buffer)
 	b.spkCounter += 1
-	spkKey := []byte("spk_" + string(b.startTs) + "_" + string(b.spkCounter))
+	spkKey := []byte(fmt.Sprintf("spk_%v_%v", b.startTs, b.spkCounter))
 	b.secondaryPrimaryKeys[string(spkKey)] = struct{}{}
 	// put spk to buffer, commit together
 	b.buffer[string(spkKey)] = flagsAndValue{
 		flags: 0,
 		value: spkValue,
 	}
+	// fmt.Printf("setting SPK %v\n", spkKey)
 	defer func() {
 		if err != nil {
 			delete(b.buffer, string(spkKey))
@@ -240,7 +285,7 @@ func (b *TikvBuffer) flush() (err error) {
 	if regionCache == nil {
 		return errors.New("region cache is nil")
 	}
-	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
+	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
 	for k, v := range b.buffer {
 		region, err := regionCache.LocateKey(bo.Clone(), []byte(k))
 		if err != nil {
@@ -274,8 +319,16 @@ func (b *TikvBuffer) flush() (err error) {
 			},
 		)
 		resp, err := b.store.SendReq(bo.Clone(), req, region, 10*time.Second)
+		// println("mem_buffer_set sent")
 		if err != nil {
 			return err
+		}
+		if resp == nil {
+			// println(resp)
+			return errors.New("resp is nil")
+		}
+		if resp.Resp == nil {
+			return errors.New("resp.Resp is nil")
 		}
 		setResp := resp.Resp.(*kvrpcpb.MemBufferSetResponse)
 		if setResp.GetRegionError() != nil {
@@ -290,40 +343,34 @@ func (b *TikvBuffer) flush() (err error) {
 }
 
 func (b *TikvBuffer) Commit() error {
-	b.flush()
+	b.Flush()
 	// commit primary
-	commitTs, err := b.store.GetOracle().GetTimestamp(nil, nil)
+	commitTs, err := b.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	if err != nil {
 		return err
 	}
-	commitReq := tikvrpc.NewRequest(
-		tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-			CommitVersion: commitTs,
-			StartVersion:  b.startTs,
-			Keys: [][]byte{
-				b.primary,
-			},
-		},
-	)
-	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
-	region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), b.primary)
-	resp, err := b.store.SendReq(
-		retry.NewBackofferWithVars(context.Background(), 1000, nil),
-		commitReq,
-		region.Region,
-		3*time.Second,
-	)
+	err = b.commitPK(commitTs)
 	if err != nil {
 		return err
-	}
-	commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
-	if commitResp.GetRegionError() != nil {
-		return errors.New("commit pk error " + commitResp.GetRegionError().String())
-	}
-	if commitResp.GetError() != nil {
-		return errors.New("commit pk error " + commitResp.GetError().String())
 	}
 
+	err = b.commitSK(commitTs)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (b *TikvBuffer) commitSK(commitTs uint64) error {
+	f := func() error {
+		return b.doCommitSK(commitTs)
+	}
+	return withRetry(f)
+}
+
+func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
+	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
 	// for each spk, read keys from its value, commit all keys
 	for spk := range b.secondaryPrimaryKeys {
 		spkValue, err := b.Get([]byte(spk))
@@ -346,6 +393,7 @@ func (b *TikvBuffer) Commit() error {
 			}
 			region2keys[region.Region] = append(region2keys[region.Region], key)
 		}
+
 		for region, keys := range region2keys {
 			commitReq := tikvrpc.NewRequest(
 				tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
@@ -355,7 +403,7 @@ func (b *TikvBuffer) Commit() error {
 				},
 			)
 			resp, err := b.store.SendReq(
-				retry.NewBackofferWithVars(context.Background(), 1000, nil),
+				retry.NewBackofferWithVars(context.Background(), 1000000, nil),
 				commitReq,
 				region,
 				3*time.Second,
@@ -365,14 +413,54 @@ func (b *TikvBuffer) Commit() error {
 			}
 			commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
 			if commitResp.GetRegionError() != nil {
-				return errors.New("commit sk error" + commitResp.GetRegionError().String())
+				return errors.New("commit sk error, " + commitResp.GetRegionError().String())
 			}
 			if commitResp.GetError() != nil {
-				return errors.New("commit sk error " + commitResp.GetError().String())
+				return errors.New("commit sk error, " + commitResp.GetError().String())
 			}
 		}
 	}
+	return nil
+}
 
+func (b *TikvBuffer) commitPK(commitTs uint64) error {
+	f := func() error {
+		return b.doCommitPK(commitTs)
+	}
+	return withRetry(f)
+}
+
+func (b *TikvBuffer) doCommitPK(commitTs uint64) error {
+	commitReq := tikvrpc.NewRequest(
+		tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
+			CommitVersion: commitTs,
+			StartVersion:  b.startTs,
+			Keys: [][]byte{
+				b.primary,
+			},
+		},
+	)
+	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
+	region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), b.primary)
+	if err != nil {
+		return err
+	}
+	resp, err := b.store.SendReq(
+		retry.NewBackofferWithVars(context.Background(), 1000000, nil),
+		commitReq,
+		region.Region,
+		3*time.Second,
+	)
+	if err != nil {
+		return err
+	}
+	commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
+	if commitResp.GetRegionError() != nil {
+		return errors.New("commit pk error " + commitResp.GetRegionError().String())
+	}
+	if commitResp.GetError() != nil {
+		return errors.New("commit pk error " + commitResp.GetError().String())
+	}
 	return nil
 }
 
@@ -384,6 +472,7 @@ func encode(keys [][]byte) ([]byte, error) {
 }
 
 func (b *TikvBuffer) Set(key []byte, value []byte) error {
+	// fmt.Printf("set key %v\n", key)
 	if len(value) == 0 {
 		return tikverr.ErrCannotSetNilValue
 	}
@@ -394,6 +483,10 @@ func (b *TikvBuffer) Set(key []byte, value []byte) error {
 	if len(b.primary) == 0 {
 		b.primary = key
 	}
+	// fmt.Printf("after set, buffer = %v\n", b.buffer)
+	// defer func() {
+	// fmt.Printf("after set maybe flush, buffer = %v\n", b.buffer)
+	// }()
 	return b.maybeFlush()
 }
 
@@ -405,6 +498,10 @@ func (b *TikvBuffer) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) e
 		flags: kv.ApplyFlagsOps(0, ops...),
 		value: value,
 	}
+	// fmt.Printf("after set with flags, buffer = %v\n", b.buffer)
+	// defer func() {
+	// fmt.Printf("after set with flags maybe flush, buffer = %v\n", b.buffer)
+	// }()
 	return b.maybeFlush()
 }
 

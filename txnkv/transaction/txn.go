@@ -169,7 +169,7 @@ func NewTiKVTxn(store KvStore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
 		// us:                unionstore.NewUnionStoreWithMemDB(snapshot),
-		us: unionstore.NewUnionStoreWithTikvBuffer(snapshot, store),
+		us: unionstore.NewUnionStoreWithTikvBuffer(startTS, snapshot, store),
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),

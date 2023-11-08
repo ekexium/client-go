@@ -1454,9 +1454,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
-			return nil, nil, retryTimes, err
+			return nil, nil, retryTimes, e
 		}
-
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		req.IsRetryRequest = true
