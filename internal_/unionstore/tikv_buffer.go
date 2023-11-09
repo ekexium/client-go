@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -191,7 +192,12 @@ func (b *TikvBuffer) doGetFromTiKV(key []byte) ([]byte, error) {
 	if len(memBufferGetResp.GetError()) > 0 {
 		return nil, errors.New("get error " + memBufferGetResp.GetError())
 	}
-	return memBufferGetResp.GetValue(), nil
+	val := memBufferGetResp.GetValue()
+	if len(val) == 0 {
+		return val, tikverr.ErrNotExist
+	} else {
+		return val, nil
+	}
 }
 
 func (b *TikvBuffer) SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error) {
@@ -231,11 +237,14 @@ func withRetry(f func() error) (err error) {
 		if err == nil {
 			return nil
 		}
+		if tikverr.IsErrKeyExist(err) || tikverr.IsErrNotFound(err) {
+			return err
+		}
 		if tryTimes > 20 {
 			logutil.BgLogger().Error("retry fails", zap.Error(err))
 			return err
 		} else {
-			logutil.BgLogger().Warn("retrying", zap.Error(err))
+			logutil.BgLogger().Warn("retrying", zap.Int("tryTimes", tryTimes), zap.Error(err))
 		}
 		time.Sleep(time.Millisecond * 500)
 	}
@@ -265,7 +274,7 @@ func (b *TikvBuffer) doFlush() (err error) {
 	}
 	// fmt.Printf("encoded, keys=%v, buffer=%v\n", keys, b.buffer)
 	b.spkCounter += 1
-	spkKey := []byte(fmt.Sprintf("spk_%v_%v", b.startTs, b.spkCounter))
+	spkKey := []byte(fmt.Sprintf("spk_%d_%d", b.startTs, b.spkCounter))
 	b.secondaryPrimaryKeys[string(spkKey)] = struct{}{}
 	// put spk to buffer, commit together
 	b.buffer[string(spkKey)] = flagsAndValue{
@@ -385,6 +394,11 @@ func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
 			return err
 		}
 
+		// var stringKeys []string
+		// for _, key := range keys {
+			// stringKeys = append(stringKeys, hex.EncodeToString(key))
+		// }
+		// logutil.BgLogger().Info("commit sk", zap.Any("keys", stringKeys))
 		region2keys := make(map[locate.RegionVerID][][]byte)
 		for _, key := range keys {
 			region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), key)
@@ -439,6 +453,11 @@ func (b *TikvBuffer) doCommitPK(commitTs uint64) error {
 				b.primary,
 			},
 		},
+	)
+	logutil.BgLogger().Info("commit pk",
+		zap.String("pk", hex.EncodeToString(b.primary)), 
+		zap.Uint64("start ts", b.startTs), 
+		zap.Uint64("commit ts", commitTs),
 	)
 	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
 	region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), b.primary)

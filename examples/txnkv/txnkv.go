@@ -15,13 +15,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/tikv/client-go/v2/internal_/logutil"
 	"github.com/tikv/client-go/v2/internal_/unionstore"
 	"github.com/tikv/client-go/v2/txnkv"
+	"go.uber.org/zap"
 )
 
 // KV represents a Key-Value pair.
@@ -62,12 +66,17 @@ func main() {
 	buffer := txn.GetMemBuffer().(*unionstore.TikvBuffer)
 
 	// make a 1 kb value
-	value := make([]byte, 1024)
-	for i := 0; i < 100_000_000; i++ {
+	// value := make([]byte, 1024)
+	// value[0] = 42
+	value := []byte{42}
+	maxn := 1000000
+	prefix := "exp23_"
+
+	for i := 0; i < maxn; i++ {
 		if i%100000 == 0 {
 			println(time.Now().String(), i)
 		}
-		key := []byte(fmt.Sprintf("exp17_%d", i))
+		key := []byte(fmt.Sprintf("%s%d", prefix, i))
 		err = buffer.Set(key, value)
 		if err != nil {
 			panic(err)
@@ -80,4 +89,22 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	readTxn, err := client.Begin()
+	logutil.BgLogger().Info("read ts", zap.Uint64("ts", readTxn.StartTS()))
+	if err != nil {
+		panic(err)
+	}
+	for i := 0; i < maxn; i += 10000 {
+		key := []byte(fmt.Sprintf("%s%d", prefix, i))
+		val, err := readTxn.Get(context.Background(), key)
+		if err != nil {
+			logutil.BgLogger().Error("get failed", zap.String("key", string(key)), zap.Error(err))
+			panic(err)
+		}
+		if !bytes.Equal(value, val) {
+			panic(fmt.Sprintf("value mismatch: %v != %v", value, val))
+		}
+	}
+	println(time.Now().String(), "after check")
 }
