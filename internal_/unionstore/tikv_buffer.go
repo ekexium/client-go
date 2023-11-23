@@ -381,7 +381,11 @@ func (b *TikvBuffer) commitSK(commitTs uint64) error {
 func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
 	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
 	// for each spk, read keys from its value, commit all keys
+	count := 0
 	for spk := range b.secondaryPrimaryKeys {
+		if count%100 == 0 {
+			logutil.BgLogger().Info("spk", zap.Int("done", count), zap.Int("total", len(b.secondaryPrimaryKeys)))
+		}
 		spkValue, err := b.Get([]byte(spk))
 		if err != nil {
 			return err
@@ -433,6 +437,7 @@ func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
 				return errors.New("commit sk error, " + commitResp.GetError().String())
 			}
 		}
+		count++
 	}
 	return nil
 }
