@@ -372,66 +372,82 @@ func (b *TikvBuffer) Commit() error {
 }
 
 func (b *TikvBuffer) commitSK(commitTs uint64) error {
+	return b.doCommitSK(commitTs)
+}
+
+func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
+	// for each spk, read keys from its value, commit all keys
+	count := 0
+	for spk := range b.secondaryPrimaryKeys {
+		if count%100 == 0 {
+			logutil.BgLogger().Info("spk", zap.Int("done", count), zap.Int("total", len(b.secondaryPrimaryKeys)))
+		}
+		err2 := b.commitOneBatch(commitTs, spk)
+		if err2 != nil {
+			return err2
+		}
+		count++
+	}
+	return nil
+}
+
+func (b *TikvBuffer) commitOneBatch(commitTs uint64, spk string) error {
 	f := func() error {
-		return b.doCommitSK(commitTs)
+		return b.doCommitOneBatch(commitTs, spk, retry.NewBackofferWithVars(context.Background(), 100000, nil))
 	}
 	return withRetry(f)
 }
 
-func (b *TikvBuffer) doCommitSK(commitTs uint64) error {
-	bo := retry.NewBackofferWithVars(context.Background(), 1000000, nil)
-	// for each spk, read keys from its value, commit all keys
-	for spk := range b.secondaryPrimaryKeys {
-		spkValue, err := b.Get([]byte(spk))
+func (b *TikvBuffer) doCommitOneBatch(commitTs uint64, spk string, bo *retry.Backoffer) error {
+	spkValue, err := b.Get([]byte(spk))
+	if err != nil {
+		return err
+	}
+	keys := make([][]byte, 0)
+	buffer := bytes.NewBuffer(spkValue)
+	decoder := gob.NewDecoder(buffer)
+	err = decoder.Decode(&keys)
+	if err != nil {
+		return err
+	}
+
+	// var stringKeys []string
+	// for _, key := range keys {
+	// stringKeys = append(stringKeys, hex.EncodeToString(key))
+	// }
+	// logutil.BgLogger().Info("commit sk", zap.Any("keys", stringKeys))
+	region2keys := make(map[locate.RegionVerID][][]byte)
+	for _, key := range keys {
+		region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), key)
 		if err != nil {
 			return err
 		}
-		keys := make([][]byte, 0)
-		buffer := bytes.NewBuffer(spkValue)
-		decoder := gob.NewDecoder(buffer)
-		err = decoder.Decode(&keys)
+		region2keys[region.Region] = append(region2keys[region.Region], key)
+	}
+
+	for region, keys := range region2keys {
+		commitReq := tikvrpc.NewRequest(
+			tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
+				CommitVersion: commitTs,
+				StartVersion:  b.startTs,
+				Keys:          keys,
+			},
+		)
+		resp, err := b.store.SendReq(
+			retry.NewBackofferWithVars(context.Background(), 1000000, nil),
+			commitReq,
+			region,
+			3*time.Second,
+		)
 		if err != nil {
 			return err
 		}
-
-		// var stringKeys []string
-		// for _, key := range keys {
-			// stringKeys = append(stringKeys, hex.EncodeToString(key))
-		// }
-		// logutil.BgLogger().Info("commit sk", zap.Any("keys", stringKeys))
-		region2keys := make(map[locate.RegionVerID][][]byte)
-		for _, key := range keys {
-			region, err := b.store.GetRegionCache().LocateKey(bo.Clone(), key)
-			if err != nil {
-				return err
-			}
-			region2keys[region.Region] = append(region2keys[region.Region], key)
+		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
+		if commitResp.GetRegionError() != nil {
+			return errors.New("commit sk error, " + commitResp.GetRegionError().String())
 		}
-
-		for region, keys := range region2keys {
-			commitReq := tikvrpc.NewRequest(
-				tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-					CommitVersion: commitTs,
-					StartVersion:  b.startTs,
-					Keys:          keys,
-				},
-			)
-			resp, err := b.store.SendReq(
-				retry.NewBackofferWithVars(context.Background(), 1000000, nil),
-				commitReq,
-				region,
-				3*time.Second,
-			)
-			if err != nil {
-				return err
-			}
-			commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
-			if commitResp.GetRegionError() != nil {
-				return errors.New("commit sk error, " + commitResp.GetRegionError().String())
-			}
-			if commitResp.GetError() != nil {
-				return errors.New("commit sk error, " + commitResp.GetError().String())
-			}
+		if commitResp.GetError() != nil {
+			return errors.New("commit sk error, " + commitResp.GetError().String())
 		}
 	}
 	return nil
