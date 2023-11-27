@@ -112,6 +112,7 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 type TxnOptions struct {
 	TxnScope string
 	StartTS  *uint64
+	LargeTxn bool
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -164,12 +165,17 @@ type KVTxn struct {
 }
 
 // NewTiKVTxn creates a new KVTxn.
-func NewTiKVTxn(store KvStore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
+func NewTiKVTxn(store KvStore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions, largeTxn bool) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
+	var us *unionstore.KVUnionStore
+	if largeTxn {
+		us = unionstore.NewUnionStoreWithTikvBuffer(startTS, snapshot, store)
+	} else {
+		us = unionstore.NewUnionStoreWithMemDB(snapshot)
+	}
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
-		// us:                unionstore.NewUnionStoreWithMemDB(snapshot),
-		us: unionstore.NewUnionStoreWithTikvBuffer(startTS, snapshot, store),
+		us:                us,
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),

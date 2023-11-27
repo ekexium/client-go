@@ -25,6 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/internal_/logutil"
 	"github.com/tikv/client-go/v2/internal_/unionstore"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +53,13 @@ func initStore() {
 }
 
 func main() {
+	value := make([]byte, 1024)
+	value[0] = 42
+	// value := []byte{42}
+	maxn := 10_000_000
+	prefix := "exp29_"
+	largeTxn := false
+
 	pdAddr := os.Getenv("PD_ADDR")
 	if pdAddr != "" {
 		os.Args = append(os.Args, "-pd", pdAddr)
@@ -59,35 +67,15 @@ func main() {
 	flag.Parse()
 	initStore()
 
-	txn, err := client.Begin()
+	option := func(opt *transaction.TxnOptions) { opt.LargeTxn = largeTxn }
+	txn, err := client.Begin(option)
 	if err != nil {
 		panic(err)
 	}
-	buffer := txn.GetMemBuffer().(*unionstore.TikvBuffer)
-
-	// make a 1 kb value
-	// value := make([]byte, 1024)
-	// value[0] = 42
-	value := []byte{42}
-	maxn := 1000000
-	prefix := "exp23_"
-
-	for i := 0; i < maxn; i++ {
-		if i%100000 == 0 {
-			println(time.Now().String(), i)
-		}
-		key := []byte(fmt.Sprintf("%s%d", prefix, i))
-		err = buffer.Set(key, value)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	println(time.Now().String(), "before commit")
-	err = buffer.Commit()
-	println(time.Now().String(), "after commit")
-	if err != nil {
-		panic(err)
+	if largeTxn {
+		goLargeTxn(txn, maxn, prefix, value)
+	} else {
+		goNormalTxn(txn, maxn, prefix, value)
 	}
 
 	readTxn, err := client.Begin()
@@ -107,4 +95,47 @@ func main() {
 		}
 	}
 	println(time.Now().String(), "after check")
+}
+
+func goLargeTxn(txn *transaction.KVTxn, maxn int, prefix string, value []byte) {
+	buffer := txn.GetMemBuffer().(*unionstore.TikvBuffer)
+	for i := 0; i < maxn; i++ {
+		if i%100000 == 0 {
+			println(time.Now().String(), i)
+		}
+		key := []byte(fmt.Sprintf("%s%d", prefix, i))
+		err := buffer.Set(key, value)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	println(time.Now().String(), "before commit")
+	err := buffer.Commit()
+	println(time.Now().String(), "after commit")
+	if err != nil {
+		panic(err)
+	}
+}
+
+func goNormalTxn(txn *transaction.KVTxn, maxn int, prefix string, value []byte) {
+	for i := 0; i < maxn; i++ {
+		if i%100000 == 0 {
+			println(time.Now().String(), i)
+		}
+		key := []byte(fmt.Sprintf("%s%d", prefix, i))
+		err := txn.Set(key, value)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	txn.SetEnableAsyncCommit(false)
+	txn.SetEnable1PC(false)
+	println(time.Now().String(), "before commit")
+	err := txn.Commit(context.Background())
+	println(time.Now().String(), "after commit")
+	if err != nil {
+		panic(err)
+	}
 }

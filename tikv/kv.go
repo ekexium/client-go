@@ -326,7 +326,7 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	}
 
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
-	return transaction.NewTiKVTxn(s, snapshot, startTS, options)
+	return transaction.NewTiKVTxn(s, snapshot, startTS, options, options.LargeTxn)
 }
 
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
