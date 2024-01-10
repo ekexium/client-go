@@ -195,6 +195,9 @@ type twoPhaseCommitter struct {
 	isInternal bool
 
 	forUpdateTSConstraints map[string]uint64
+
+	primaryOp                    kvrpcpb.Op
+	pipelinedStart, pipelinedEnd []byte
 }
 
 type memBufferMutations struct {
@@ -920,7 +923,9 @@ const CommitSecondaryMaxBackoff = 41000
 // doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
 // in a batch will belong to the same region).
 func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
-	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
+	if histogram := action.tiKVTxnRegionsNumHistogram(); histogram != nil {
+		histogram.Observe(float64(len(groups)))
+	}
 
 	var sizeFunc = c.keySize
 
@@ -1526,6 +1531,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	var binlogChan <-chan BinlogWriteResult
 	if c.shouldWriteBinlog() {
 		binlogChan = c.binlog.Prewrite(ctx, c.primary())
+	}
+
+	if len(c.pipelinedStart) > 0 && len(c.pipelinedEnd) > 0 {
+		return c.commitFlushedMutations(bo)
 	}
 
 	start := time.Now()

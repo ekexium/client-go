@@ -54,3 +54,5 @@ type MemDB = unionstore.MemDB
 
 // MemDBCheckpoint is the checkpoint of memory DB.
 type MemDBCheckpoint = unionstore.MemDBCheckpoint
+
+type PipelinedMemDB = unionstore.PipelinedMemDB

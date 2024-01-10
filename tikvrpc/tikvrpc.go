@@ -74,6 +74,7 @@ const (
 	CmdCheckSecondaryLocks
 	CmdFlashbackToVersion
 	CmdPrepareFlashbackToVersion
+	CmdFlush
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet

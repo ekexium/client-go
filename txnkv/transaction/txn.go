@@ -110,8 +110,9 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope string
-	StartTS  *uint64
+	TxnScope     string
+	StartTS      *uint64
+	PipelinedTxn bool
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -161,6 +162,9 @@ type KVTxn struct {
 	aggressiveLockingDirty   atomic.Bool
 
 	forUpdateTSChecks map[string]uint64
+
+	isPipelined    bool
+	pipelinedMemDB *unionstore.PipelinedMemDB
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -179,6 +183,11 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		enable1PC:         cfg.Enable1PC,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		RequestSource:     snapshot.RequestSource,
+	}
+	if options.PipelinedTxn {
+		if err := newTiKVTxn.SetPipelined(); err != nil {
+			return nil, err
+		}
 	}
 	return newTiKVTxn, nil
 }
@@ -389,6 +398,125 @@ func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
 // IsPessimistic returns true if it is pessimistic.
 func (txn *KVTxn) IsPessimistic() bool {
 	return txn.isPessimistic
+}
+
+// IsPipelined returns true if it's a pipelined transaction.
+func (txn *KVTxn) IsPipelined() bool {
+	return txn.isPipelined
+}
+
+func (txn *KVTxn) SetPipelined() error {
+	txn.isPipelined = true
+	// TODO: set the correct sessionID
+	committer, err := newTwoPhaseCommitter(txn, 0)
+	if err != nil {
+		return err
+	}
+	txn.committer = committer
+	// disable 1pc and async commit for pipelined txn.
+	txn.committer.setOnePC(false)
+	txn.committer.setAsyncCommit(false)
+	txn.pipelinedMemDB = unionstore.NewPipelinedMemDB(func(memdb *unionstore.MemDB) error {
+		// The flush function will not be called concurrently.
+		// TODO: set backoffer from upper context.
+		bo := retry.NewBackofferWithVars(context.Background(), 20000, nil)
+		mutations := newMemBufferMutations(memdb.Len(), memdb)
+		if memdb.Len() == 0 {
+			return nil
+		}
+		// update bounds
+		{
+			// lower bound
+			it, err := memdb.Iter(nil, nil)
+			if err != nil {
+				return err
+			}
+			if !it.Valid() {
+				return errors.New("invalid iterator")
+			}
+			startKey := it.Key()
+			if bytes.Compare(txn.committer.pipelinedStart, startKey) > 0 {
+				txn.committer.pipelinedStart = make([]byte, len(startKey))
+				copy(txn.committer.pipelinedStart, startKey)
+			}
+			it.Close()
+			// upper bound
+			it, err = memdb.IterReverse(nil, nil)
+			if err != nil {
+				return err
+			}
+			if !it.Valid() {
+				return errors.New("invalid iterator")
+			}
+			endKey := it.Key()
+			if bytes.Compare(txn.committer.pipelinedEnd, endKey) < 0 {
+				txn.committer.pipelinedEnd = make([]byte, len(endKey))
+				copy(txn.committer.pipelinedEnd, endKey)
+			}
+			it.Close()
+		}
+		var err error
+		for it := memdb.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
+			if err != nil {
+				return err
+			}
+			flags := it.Flags()
+			var value []byte
+			var op kvrpcpb.Op
+
+			if !it.HasValue() {
+				if !flags.HasLocked() {
+					continue
+				}
+				op = kvrpcpb.Op_Lock
+			} else {
+				value = it.Value()
+				if len(value) > 0 {
+					op = kvrpcpb.Op_Put
+					if flags.HasPresumeKeyNotExists() {
+						op = kvrpcpb.Op_Insert
+					}
+				} else {
+					if flags.HasPresumeKeyNotExists() {
+						// delete-your-writes keys in optimistic txn need check not exists in prewrite-phase
+						// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
+						op = kvrpcpb.Op_CheckNotExists
+					} else {
+						if flags.HasNewlyInserted() {
+							// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
+							// other deletes for example the secondary index delete.
+							// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
+							// the logic is same as the pessimistic mode.
+							if flags.HasLocked() {
+								op = kvrpcpb.Op_Lock
+							} else {
+								continue
+							}
+						} else {
+							op = kvrpcpb.Op_Del
+						}
+					}
+				}
+			}
+
+			if len(txn.committer.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+				pk := it.Key()
+				txn.committer.primaryKey = make([]byte, len(pk))
+				// copy the primary key to avoid reference to the memory arena.
+				copy(txn.committer.primaryKey, pk)
+				txn.committer.primaryOp = op
+			}
+
+			mustExist, mustNotExist := flags.HasAssertExist(), flags.HasAssertNotExist()
+			if txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
+				mustExist, mustNotExist = false, false
+			}
+			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
+		}
+		txn.committer.pipelinedFlushMutations(bo, mutations)
+		return nil
+	})
+	return nil
 }
 
 // IsCasualConsistency returns if the transaction allows linearizability
@@ -1422,6 +1550,10 @@ func (txn *KVTxn) GetUnionStore() *unionstore.KVUnionStore {
 // GetMemBuffer return the MemBuffer binding to this transaction.
 func (txn *KVTxn) GetMemBuffer() *unionstore.MemDB {
 	return txn.us.GetMemBuffer()
+}
+
+func (txn *KVTxn) GetPipelinedMemBuffer() *unionstore.PipelinedMemDB {
+	return txn.pipelinedMemDB
 }
 
 // GetSnapshot returns the Snapshot binding to this transaction.
