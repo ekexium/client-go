@@ -213,6 +213,8 @@ func (t CmdType) String() string {
 		return "PrepareFlashbackToVersion"
 	case CmdGetTiFlashSystemTable:
 		return "GetTiFlashSystemTable"
+	case CmdFlush:
+		return "Flush"
 	}
 	return "Unknown"
 }
@@ -543,9 +545,14 @@ func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.FlashbackToVersionRequest)
 }
 
-// PrepareFlashbackToVersion returns PrepareFlashbackToVersion in request.
+// PrepareFlashbackToVersion returns PrepareFlashbackToVersionRequest in request.
 func (req *Request) PrepareFlashbackToVersion() *kvrpcpb.PrepareFlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.PrepareFlashbackToVersionRequest)
+}
+
+// Flush returns FlushRequest in request.
+func (req *Request) Flush() *kvrpcpb.FlushRequest {
+	return req.Req.(*kvrpcpb.FlushRequest)
 }
 
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
@@ -607,6 +614,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_FlashbackToVersion{FlashbackToVersion: req.FlashbackToVersion()}}
 	case CmdPrepareFlashbackToVersion:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_PrepareFlashbackToVersion{PrepareFlashbackToVersion: req.PrepareFlashbackToVersion()}}
+	case CmdFlush:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Flush{Flush: req.Flush()}}
 	}
 	return nil
 }
@@ -802,6 +811,8 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 		req.FlashbackToVersion().Context = ctx
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().Context = ctx
+	case CmdFlush:
+		req.Flush().Context = ctx
 	default:
 		return false
 	}
@@ -970,6 +981,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		}
 	case CmdPrepareFlashbackToVersion:
 		p = &kvrpcpb.PrepareFlashbackToVersionResponse{
+			RegionError: e,
+		}
+	case CmdFlush:
+		p = &kvrpcpb.FlushResponse{
 			RegionError: e,
 		}
 	default:
@@ -1142,6 +1157,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
 	case CmdGetTiFlashSystemTable:
 		resp.Resp, err = client.GetTiFlashSystemTable(ctx, req.GetTiFlashSystemTable())
+	case CmdFlush:
+		resp.Resp, err = client.KvFlush(ctx, req.Flush())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1305,7 +1322,8 @@ func (req *Request) IsTxnWriteRequest() bool {
 		req.Type == CmdTxnHeartBeat ||
 		req.Type == CmdResolveLock ||
 		req.Type == CmdFlashbackToVersion ||
-		req.Type == CmdPrepareFlashbackToVersion {
+		req.Type == CmdPrepareFlashbackToVersion ||
+		req.Type == CmdFlush {
 		return true
 	}
 	return false
@@ -1358,7 +1376,9 @@ func (req *Request) GetStartTS() uint64 {
 	case CmdFlashbackToVersion:
 		return req.FlashbackToVersion().GetStartTs()
 	case CmdPrepareFlashbackToVersion:
-		req.PrepareFlashbackToVersion().GetStartTs()
+		return req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdFlush:
+		return req.Flush().GetStartTs()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:

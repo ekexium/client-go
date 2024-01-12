@@ -198,6 +198,7 @@ func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutatio
 }
 
 func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
+	logutil.BgLogger().Info("start to commit pipelined transaction")
 	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Warn("commit pipelined transaction get commitTS failed",
