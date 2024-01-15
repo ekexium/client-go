@@ -416,6 +416,10 @@ func (txn *KVTxn) SetPipelined() error {
 	// disable 1pc and async commit for pipelined txn.
 	txn.committer.setOnePC(false)
 	txn.committer.setAsyncCommit(false)
+	commitDetail := &util.CommitDetails{
+		ResolveLock: util.ResolveLockDetail{},
+	}
+	txn.committer.setDetail(commitDetail)
 	txn.pipelinedMemDB = unionstore.NewPipelinedMemDB(func(memdb *unionstore.MemDB) error {
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
@@ -435,7 +439,7 @@ func (txn *KVTxn) SetPipelined() error {
 				return errors.New("invalid iterator")
 			}
 			startKey := it.Key()
-			if bytes.Compare(txn.committer.pipelinedStart, startKey) > 0 {
+			if len(txn.committer.pipelinedStart) == 0 || bytes.Compare(txn.committer.pipelinedStart, startKey) > 0 {
 				txn.committer.pipelinedStart = make([]byte, len(startKey))
 				copy(txn.committer.pipelinedStart, startKey)
 			}
@@ -449,7 +453,7 @@ func (txn *KVTxn) SetPipelined() error {
 				return errors.New("invalid iterator")
 			}
 			endKey := it.Key()
-			if bytes.Compare(txn.committer.pipelinedEnd, endKey) < 0 {
+			if len(txn.committer.pipelinedEnd) == 0 || bytes.Compare(txn.committer.pipelinedEnd, endKey) < 0 {
 				txn.committer.pipelinedEnd = make([]byte, len(endKey))
 				copy(txn.committer.pipelinedEnd, endKey)
 			}
@@ -600,16 +604,18 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 
 	defer committer.ttlManager.close()
 
-	initRegion := trace.StartRegion(ctx, "InitKeys")
-	err = committer.initKeysAndMutations(ctx)
-	initRegion.End()
+	if !txn.isPipelined {
+		initRegion := trace.StartRegion(ctx, "InitKeys")
+		err = committer.initKeysAndMutations(ctx)
+		initRegion.End()
+	}
 	if err != nil {
 		if txn.IsPessimistic() {
 			txn.asyncPessimisticRollback(ctx, committer.mutations.GetKeys(), txn.committer.forUpdateTS)
 		}
 		return err
 	}
-	if committer.mutations.Len() == 0 {
+	if !txn.isPipelined && committer.mutations.Len() == 0 {
 		return nil
 	}
 
@@ -1513,7 +1519,7 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load())
+	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load()) && !txn.isPipelined
 }
 
 // StartTS returns the transaction start timestamp.

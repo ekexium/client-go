@@ -687,6 +687,8 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.CheckTxnStatus}, nil
 	case *tikvpb.BatchCommandsResponse_Response_CheckSecondaryLocks:
 		return &Response{Resp: res.CheckSecondaryLocks}, nil
+	case *tikvpb.BatchCommandsResponse_Response_Flush:
+		return &Response{Resp: res.Flush}, nil
 	}
 	panic("unreachable")
 }

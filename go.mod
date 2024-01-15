@@ -62,4 +62,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/pingcap/kvproto => github.com/ekexium/kvproto v0.0.0-20240111104105-12e169f6dd88
+replace (
+	github.com/pingcap/kvproto => github.com/ekexium/kvproto v0.0.0-20240111104105-12e169f6dd88
+	github.com/tikv/pd/client => github.com/you06/pd/client v0.0.0-20240115070044-4986fcfa1341
+)

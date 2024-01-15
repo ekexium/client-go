@@ -207,12 +207,16 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		return err
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
+	logutil.BgLogger().Info("pipelined transaction is committed")
 
 	primaryMutation := NewPlainMutations(1)
 	primaryMutation.Push(c.primaryOp, c.primaryKey, nil, false, false, false, false)
 	if err = c.commitMutations(bo, &primaryMutation); err != nil {
 		return errors.Trace(err)
 	}
+	c.mu.RLock()
+	c.mu.committed = true
+	c.mu.RUnlock()
 	// async resolve the rest locks.
 	commitBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 	go c.resolveFlushedLocks(commitBo, c.pipelinedStart, c.pipelinedEnd)

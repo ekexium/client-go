@@ -1465,23 +1465,25 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
-	// Check async commit is available or not.
-	if c.checkAsyncCommit() {
-		commitTSMayBeCalculated = true
-		c.setAsyncCommit(true)
-		c.hasTriedAsyncCommit = true
-	}
-	// Check if 1PC is enabled.
-	if c.checkOnePC() {
-		commitTSMayBeCalculated = true
-		c.setOnePC(true)
-		c.hasTriedOnePC = true
+	if !c.txn.isPipelined {
+		// Check async commit is available or not.
+		if c.checkAsyncCommit() {
+			commitTSMayBeCalculated = true
+			c.setAsyncCommit(true)
+			c.hasTriedAsyncCommit = true
+		}
+		// Check if 1PC is enabled.
+		if c.checkOnePC() {
+			commitTSMayBeCalculated = true
+			c.setOnePC(true)
+			c.hasTriedOnePC = true
+		}
 	}
 
 	// if lazy uniqueness check is enabled in TiDB (@@constraint_check_in_place_pessimistic=0), for_update_ts might be
 	// zero for a pessimistic transaction. We set it to the start_ts to force the PrewritePessimistic path in TiKV.
 	// TODO: can we simply set for_update_ts = start_ts for all pessimistic transactions whose for_update_ts=0?
-	if c.forUpdateTS == 0 {
+	if c.forUpdateTS == 0 && !c.txn.isPipelined {
 		for i := 0; i < c.mutations.Len(); i++ {
 			if c.mutations.NeedConstraintCheckInPrewrite(i) {
 				c.forUpdateTS = c.startTS
@@ -1534,7 +1536,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	if len(c.pipelinedStart) > 0 && len(c.pipelinedEnd) > 0 {
+		if err := c.txn.pipelinedMemDB.Flush(); err != nil {
+			return err
+		}
 		return c.commitFlushedMutations(bo)
+	} else if c.txn.IsPipelined() {
+		panic("unreachable")
 	}
 
 	start := time.Now()
