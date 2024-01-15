@@ -108,8 +108,10 @@ func (p *PipelinedMemDB) MayFlush() error {
 	if p.onFlushing.CompareAndSwap(false, true) {
 		return nil
 	}
-	if err := <-p.errCh; err != nil {
-		return err
+	if p.flushing != nil {
+		if err := <-p.errCh; err != nil {
+			return err
+		}
 	}
 	p.flushing = p.memBuffer
 	p.len += p.flushing.Len()
