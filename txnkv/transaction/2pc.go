@@ -1535,13 +1535,15 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		binlogChan = c.binlog.Prewrite(ctx, c.primary())
 	}
 
-	if len(c.pipelinedStart) > 0 && len(c.pipelinedEnd) > 0 {
+	if c.txn.IsPipelined() {
 		if err := c.txn.pipelinedMemDB.Flush(); err != nil {
 			return err
 		}
-		return c.commitFlushedMutations(bo)
-	} else if c.txn.IsPipelined() {
-		panic("unreachable")
+		if len(c.pipelinedStart) > 0 && len(c.pipelinedEnd) > 0 {
+			return c.commitFlushedMutations(bo)
+		} else {
+			panic("unreachable")
+		}
 	}
 
 	start := time.Now()

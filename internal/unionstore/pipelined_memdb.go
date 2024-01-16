@@ -50,6 +50,11 @@ func NewPipelinedMemDB(flushFunc FlushFunc) *PipelinedMemDB {
 	}
 }
 
+// Dirty returns whether the pipelined buffer is mutated.
+func (p *PipelinedMemDB) Dirty() bool {
+	return p.memBuffer.Dirty() || p.flushing == nil
+}
+
 // Get the value by given key, it returns tikverr.ErrNotExist if not exist.
 // The priority of the value is MemBuffer > flushing MemBuffer > Snapshot.
 func (p *PipelinedMemDB) Get(k []byte) ([]byte, error) {

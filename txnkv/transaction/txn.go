@@ -1519,7 +1519,8 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load()) && !txn.isPipelined
+	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load()) ||
+		(txn.isPipelined && !txn.pipelinedMemDB.Dirty())
 }
 
 // StartTS returns the transaction start timestamp.

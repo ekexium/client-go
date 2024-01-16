@@ -242,9 +242,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 			CommitVersion: atomic.LoadUint64(&c.commitTS),
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-			ResourceControlContext: &kvrpcpb.ResourceControlContext{
-				ResourceGroupName: c.txn.GetRequestSource(),
-			},
+			RequestSource: c.txn.GetRequestSource(),
 		})
 		req.RequestSource = c.txn.GetRequestSource()
 		resp, err := c.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
@@ -262,7 +260,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 			return
 		}
 		if regionErr != nil {
-			err = bo.Backoff(retry.BoRegionMiss, err)
+			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Error("send resolve lock get region error", zap.Error(err))
 				return
