@@ -38,7 +38,10 @@ type PipelinedMemDB struct {
 	len, size  int // len and size records the total flushed and onflushing memdb.
 }
 
-const MinFlushKeys = 10000
+const (
+	MinFlushKeys = 10000
+	MinFlushSize = 16 * 1024 * 1024 // 16MB
+)
 
 type FlushFunc func(*MemDB) error
 
@@ -107,7 +110,7 @@ func (p *PipelinedMemDB) MayFlush() error {
 	if p.flushFunc == nil {
 		return nil
 	}
-	if p.memBuffer.Len() < MinFlushKeys {
+	if p.memBuffer.Len() < MinFlushKeys || p.memBuffer.Size() < MinFlushSize {
 		return nil
 	}
 	if !p.onFlushing.CompareAndSwap(false, true) {
