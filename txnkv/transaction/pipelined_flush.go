@@ -95,7 +95,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
 ) (err error) {
 	if len(c.primaryKey) == 0 {
-		return errors.New("primary key should be set before pipelined flush")
+		return errors.New("[pipelined txn] primary key should be set before pipelined flush")
 	}
 
 	tBegin := time.Now()
@@ -109,7 +109,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 		reqBegin := time.Now()
 		if reqBegin.Sub(tBegin) > slowRequestThreshold {
 			logutil.BgLogger().Warn(
-				"slow pipelined flush request",
+				"[pipelined txn] slow pipelined flush request",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("region", &batch.region),
 				zap.Int("attempts", attempts),
@@ -198,16 +198,16 @@ func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutatio
 }
 
 func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
-	logutil.BgLogger().Info("start to commit pipelined transaction")
+	logutil.BgLogger().Info("[pipelined txn] start to commit transaction")
 	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 	if err != nil {
-		logutil.Logger(bo.GetCtx()).Warn("commit pipelined transaction get commitTS failed",
+		logutil.Logger(bo.GetCtx()).Warn("[pipelined txn] commit transaction get commitTS failed",
 			zap.Error(err),
 			zap.Uint64("txnStartTS", c.startTS))
 		return err
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
-	logutil.BgLogger().Info("pipelined transaction is committed")
+	logutil.BgLogger().Info("[pipelined txn] transaction is committed")
 
 	primaryMutation := NewPlainMutations(1)
 	primaryMutation.Push(c.primaryOp, c.primaryKey, nil, false, false, false, false)
@@ -279,7 +279,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		}
 		resolvedRegions++
 		if bytes.Compare(loc.EndKey, end) > 0 {
-			logutil.BgLogger().Info("Commit pipelined transaction done",
+			logutil.BgLogger().Info("[pipelined txn] commit transaction secondaries done",
 				zap.Int("resolved regions", resolvedRegions))
 			return
 		}

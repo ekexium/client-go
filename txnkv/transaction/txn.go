@@ -420,7 +420,13 @@ func (txn *KVTxn) SetPipelined() error {
 		ResolveLock: util.ResolveLockDetail{},
 	}
 	txn.committer.setDetail(commitDetail)
-	txn.pipelinedMemDB = unionstore.NewPipelinedMemDB(func(memdb *unionstore.MemDB) error {
+	txn.pipelinedMemDB = unionstore.NewPipelinedMemDB(func(memdb *unionstore.MemDB) (err error) {
+		defer func() {
+			if err != nil {
+				txn.committer.ttlManager.close()
+			}
+		}()
+		logutil.BgLogger().Info("[pipelined txn] flush memdb to kv store", zap.Int("len", memdb.Len()), zap.Int("size", memdb.Size()))
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
 		bo := retry.NewBackofferWithVars(context.Background(), 20000, nil)
@@ -430,8 +436,9 @@ func (txn *KVTxn) SetPipelined() error {
 		}
 		// update bounds
 		{
+			var it unionstore.Iterator
 			// lower bound
-			it, err := memdb.Iter(nil, nil)
+			it, err = memdb.Iter(nil, nil)
 			if err != nil {
 				return err
 			}
@@ -459,7 +466,6 @@ func (txn *KVTxn) SetPipelined() error {
 			}
 			it.Close()
 		}
-		var err error
 		for it := memdb.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 			if err != nil {
 				return err
@@ -517,8 +523,7 @@ func (txn *KVTxn) SetPipelined() error {
 			}
 			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		}
-		txn.committer.pipelinedFlushMutations(bo, mutations)
-		return nil
+		return txn.committer.pipelinedFlushMutations(bo, mutations)
 	})
 	return nil
 }
