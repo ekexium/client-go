@@ -52,7 +52,7 @@ func NewPipelinedMemDB(flushFunc FlushFunc) *PipelinedMemDB {
 
 // Dirty returns whether the pipelined buffer is mutated.
 func (p *PipelinedMemDB) Dirty() bool {
-	return p.memBuffer.Dirty() || p.flushing == nil
+	return p.memBuffer.Dirty() || p.flushing != nil
 }
 
 // Get the value by given key, it returns tikverr.ErrNotExist if not exist.
@@ -110,7 +110,7 @@ func (p *PipelinedMemDB) MayFlush() error {
 	if p.memBuffer.Len() < MinFlushKeys {
 		return nil
 	}
-	if p.onFlushing.CompareAndSwap(false, true) {
+	if !p.onFlushing.CompareAndSwap(false, true) {
 		return nil
 	}
 	if p.flushing != nil {
