@@ -75,6 +75,7 @@ const (
 	CmdFlashbackToVersion
 	CmdPrepareFlashbackToVersion
 	CmdFlush
+	CmdBufferBatchGet
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet
@@ -555,6 +556,11 @@ func (req *Request) Flush() *kvrpcpb.FlushRequest {
 	return req.Req.(*kvrpcpb.FlushRequest)
 }
 
+// BufferBatchGet returns BufferBatchGetRequest in request.
+func (req *Request) BufferBatchGet() *kvrpcpb.BufferBatchGetRequest {
+	return req.Req.(*kvrpcpb.BufferBatchGetRequest)
+}
+
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
 func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Request {
 	switch req.Type {
@@ -616,6 +622,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_PrepareFlashbackToVersion{PrepareFlashbackToVersion: req.PrepareFlashbackToVersion()}}
 	case CmdFlush:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Flush{Flush: req.Flush()}}
+	case CmdBufferBatchGet:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_BufferBatchGet{BufferBatchGet: req.BufferBatchGet()}}
 	}
 	return nil
 }
@@ -689,6 +697,8 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.CheckSecondaryLocks}, nil
 	case *tikvpb.BatchCommandsResponse_Response_Flush:
 		return &Response{Resp: res.Flush}, nil
+	case *tikvpb.BatchCommandsResponse_Response_BufferBatchGet:
+		return &Response{Resp: res.BufferBatchGet}, nil
 	}
 	panic("unreachable")
 }
@@ -815,6 +825,8 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 		req.PrepareFlashbackToVersion().Context = ctx
 	case CmdFlush:
 		req.Flush().Context = ctx
+	case CmdBufferBatchGet:
+		req.BufferBatchGet().Context = ctx
 	default:
 		return false
 	}
@@ -989,6 +1001,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.FlushResponse{
 			RegionError: e,
 		}
+	case CmdBufferBatchGet:
+		p = &kvrpcpb.BufferBatchGetResponse{
+			RegionError: e,
+		}
 	default:
 		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
@@ -1161,6 +1177,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetTiFlashSystemTable(ctx, req.GetTiFlashSystemTable())
 	case CmdFlush:
 		resp.Resp, err = client.KvFlush(ctx, req.Flush())
+	case CmdBufferBatchGet:
+		resp.Resp, err = client.KvBufferBatchGet(ctx, req.BufferBatchGet())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1381,6 +1399,8 @@ func (req *Request) GetStartTS() uint64 {
 		return req.PrepareFlashbackToVersion().GetStartTs()
 	case CmdFlush:
 		return req.Flush().GetStartTs()
+	case CmdBufferBatchGet:
+		return req.BufferBatchGet().GetVersion()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:

@@ -407,6 +407,7 @@ func (txn *KVTxn) IsPipelined() bool {
 
 func (txn *KVTxn) SetPipelined() error {
 	txn.isPipelined = true
+	txn.snapshot.SetPipelined()
 	// TODO: set the correct sessionID
 	committer, err := newTwoPhaseCommitter(txn, 0)
 	if err != nil {
