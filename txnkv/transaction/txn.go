@@ -427,7 +427,7 @@ func (txn *KVTxn) SetPipelined() error {
 				txn.committer.ttlManager.close()
 			}
 		}()
-		logutil.BgLogger().Info("[pipelined txn] flush memdb to kv store", zap.Int("len", memdb.Len()), zap.Int("size", memdb.Size()))
+		logutil.BgLogger().Info("[pipelined dml] flush memdb to kv store", zap.Int("len", memdb.Len()), zap.Int("size", memdb.Size()))
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
 		bo := retry.NewBackofferWithVars(context.Background(), 20000, nil)

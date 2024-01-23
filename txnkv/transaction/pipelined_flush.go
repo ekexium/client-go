@@ -16,6 +16,7 @@ package transaction
 
 import (
 	"bytes"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -95,7 +96,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
 ) (err error) {
 	if len(c.primaryKey) == 0 {
-		return errors.New("[pipelined txn] primary key should be set before pipelined flush")
+		return errors.New("[pipelined dml] primary key should be set before pipelined flush")
 	}
 
 	tBegin := time.Now()
@@ -103,13 +104,14 @@ func (action actionPipelinedFlush) handleSingleBatch(
 
 	req := c.buildPipelinedFlushRequest(batch)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	var resolvingRecordToken *int
 
 	for {
 		attempts++
 		reqBegin := time.Now()
 		if reqBegin.Sub(tBegin) > slowRequestThreshold {
 			logutil.BgLogger().Warn(
-				"[pipelined txn] slow pipelined flush request",
+				"[pipelined dml] slow pipelined flush request",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("region", &batch.region),
 				zap.Int("attempts", attempts),
@@ -165,6 +167,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 		}
 		flushResp := resp.Resp.(*kvrpcpb.FlushResponse)
 		keyErrs := flushResp.GetErrors()
+		var locks []*txnlock.Lock
 		if len(keyErrs) == 0 {
 			// Clear the RPC Error since the request is evaluated successfully.
 			sender.SetRPCError(nil)
@@ -183,6 +186,70 @@ func (action actionPipelinedFlush) handleSingleBatch(
 				c.run(c, nil)
 			}
 			return nil
+		} else {
+			locks = make([]*txnlock.Lock, 0, len(keyErrs))
+		}
+
+		for _, keyErr := range keyErrs {
+			// Check already exists error
+			if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
+				e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
+				return c.extractKeyExistsErr(e)
+			}
+
+			// Extract lock from key error
+			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+			if err1 != nil {
+				return err1
+			}
+			logutil.BgLogger().Info(
+				"[pipelined dml] encounters lock",
+				zap.Uint64("session", c.sessionID),
+				zap.Uint64("txnID", c.startTS),
+				zap.Stringer("lock", lock),
+			)
+			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
+			// fail due to a WriteConflict error. So we can construct and return an error here early.
+			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
+			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
+			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
+			if lock.TxnID > c.startTS && !c.isPessimistic {
+				return tikverr.NewErrWriteConflictWithArgs(
+					c.startTS,
+					lock.TxnID,
+					0,
+					lock.Key,
+					kvrpcpb.WriteConflict_Optimistic,
+				)
+			}
+			locks = append(locks, lock)
+		}
+		if resolvingRecordToken == nil {
+			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
+			resolvingRecordToken = &token
+			defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *resolvingRecordToken)
+		} else {
+			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
+		}
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: c.startTS,
+			Locks:         locks,
+			Detail:        &c.getDetail().ResolveLock,
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
+		if err != nil {
+			return err
+		}
+		msBeforeExpired := resolveLockRes.TTL
+		if msBeforeExpired > 0 {
+			err = bo.BackoffWithCfgAndMaxSleep(
+				retry.BoTxnLock,
+				int(msBeforeExpired),
+				errors.Errorf("[pipelined dml] flush lockedKeys: %d", len(locks)),
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -198,16 +265,16 @@ func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutatio
 }
 
 func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
-	logutil.BgLogger().Info("[pipelined txn] start to commit transaction")
+	logutil.BgLogger().Info("[pipelined dml] start to commit transaction")
 	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 	if err != nil {
-		logutil.Logger(bo.GetCtx()).Warn("[pipelined txn] commit transaction get commitTS failed",
+		logutil.Logger(bo.GetCtx()).Warn("[pipelined dml] commit transaction get commitTS failed",
 			zap.Error(err),
 			zap.Uint64("txnStartTS", c.startTS))
 		return err
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
-	logutil.BgLogger().Info("[pipelined txn] transaction is committed")
+	logutil.BgLogger().Info("[pipelined dml] transaction is committed")
 
 	primaryMutation := NewPlainMutations(1)
 	primaryMutation.Push(c.primaryOp, c.primaryKey, nil, false, false, false, false)
@@ -279,7 +346,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		}
 		resolvedRegions++
 		if bytes.Compare(loc.EndKey, end) > 0 {
-			logutil.BgLogger().Info("[pipelined txn] commit transaction secondaries done",
+			logutil.BgLogger().Info("[pipelined dml] commit transaction secondaries done",
 				zap.Int("resolved regions", resolvedRegions))
 			return
 		}
