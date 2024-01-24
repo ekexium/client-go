@@ -34,7 +34,9 @@ import (
 	"go.uber.org/zap"
 )
 
-type actionPipelinedFlush struct{}
+type actionPipelinedFlush struct {
+	generation uint64
+}
 
 var _ twoPhaseCommitAction = actionPipelinedFlush{}
 
@@ -46,7 +48,7 @@ func (action actionPipelinedFlush) tiKVTxnRegionsNumHistogram() prometheus.Obser
 	return nil
 }
 
-func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations) *tikvrpc.Request {
+func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, generation uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 
@@ -73,6 +75,7 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations) *ti
 		PrimaryKey:  c.primary(),
 		StartTs:     c.startTS,
 		MinCommitTs: minCommitTS,
+		Generation:  generation,
 	}
 
 	r := tikvrpc.NewRequest(
@@ -102,7 +105,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	tBegin := time.Now()
 	attempts := 0
 
-	req := c.buildPipelinedFlushRequest(batch)
+	req := c.buildPipelinedFlushRequest(batch, action.generation)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	var resolvingRecordToken *int
 
@@ -159,7 +162,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			if same {
 				continue
 			}
-			err = c.doActionOnMutations(bo, actionPipelinedFlush{}, batch.mutations)
+			err = c.doActionOnMutations(bo, actionPipelinedFlush{generation: action.generation}, batch.mutations)
 			return err
 		}
 		if resp.Resp == nil {
@@ -254,14 +257,14 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	}
 }
 
-func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutations CommitterMutations, generation uint64) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("twoPhaseCommitter.pipelinedFlushMutations", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	return c.doActionOnMutations(bo, actionPipelinedFlush{}, mutations)
+	return c.doActionOnMutations(bo, actionPipelinedFlush{generation}, mutations)
 }
 
 func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {

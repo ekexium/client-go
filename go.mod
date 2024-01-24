@@ -63,6 +63,6 @@ require (
 )
 
 replace (
-	github.com/pingcap/kvproto => github.com/ekexium/kvproto v0.0.0-20240111104105-12e169f6dd88
+	github.com/pingcap/kvproto => github.com/ekexium/kvproto v0.0.0-20240124080939-d0c78cc1c276
 	github.com/tikv/pd/client => github.com/you06/pd/client v0.0.0-20240115070044-4986fcfa1341
 )

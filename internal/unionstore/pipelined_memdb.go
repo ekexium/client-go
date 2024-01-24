@@ -20,6 +20,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 )
 
 // PipelinedMemDB is a Store which contains
@@ -112,7 +113,7 @@ func (p *PipelinedMemDB) MayFlush() error {
 		return nil
 	}
 	size := p.memBuffer.Size()
-	if (p.memBuffer.Len() < MinFlushKeys || size < MinFlushSize) && size < MaxFlushSize {
+	if size < MinFlushSize || (p.memBuffer.Len() < MinFlushKeys && size < MaxFlushSize) {
 		return nil
 	}
 	if !p.onFlushing.CompareAndSwap(false, true) && size < MaxFlushSize {
@@ -131,6 +132,8 @@ func (p *PipelinedMemDB) MayFlush() error {
 	p.size += p.flushing.Size()
 	p.memBuffer = newMemDB()
 	go func() {
+		metrics.TiKVPipelinedFlushLenHistogram.Observe(float64(p.flushing.Len()))
+		metrics.TiKVPipelinedFlushSizeHistogram.Observe(float64(p.flushing.Size()))
 		p.errCh <- p.flushFunc(p.flushing)
 		p.onFlushing.Store(false)
 	}()
@@ -149,6 +152,8 @@ func (p *PipelinedMemDB) Flush() error {
 	if p.memBuffer.Len() > 0 {
 		p.len += p.memBuffer.Len()
 		p.size += p.memBuffer.Size()
+		metrics.TiKVPipelinedFlushLenHistogram.Observe(float64(p.memBuffer.Len()))
+		metrics.TiKVPipelinedFlushSizeHistogram.Observe(float64(p.memBuffer.Size()))
 		return p.flushFunc(p.memBuffer)
 	}
 	return nil

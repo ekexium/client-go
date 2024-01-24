@@ -104,6 +104,8 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVPipelinedFlushLenHistogram           prometheus.Histogram
+	TiKVPipelinedFlushSizeHistogram          prometheus.Histogram
 )
 
 // Label constants.
@@ -726,6 +728,24 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVPipelinedFlushLenHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_len",
+			Help:      "Bucketed histogram of length of pipelined flushed memdb",
+			Buckets:   prometheus.ExponentialBuckets(10000, 1.2, 12), // 10K ~ 89K
+		})
+
+	TiKVPipelinedFlushSizeHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_size",
+			Help:      "Bucketed histogram of size of pipelined flushed memdb",
+			Buckets:   prometheus.ExponentialBuckets(16777216, 1.2, 12), // 16M ~ 142M
+		})
+
 	initShortcuts()
 }
 
@@ -809,6 +829,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVPipelinedFlushLenHistogram)
+	prometheus.MustRegister(TiKVPipelinedFlushSizeHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

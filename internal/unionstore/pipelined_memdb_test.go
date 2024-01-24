@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 func TestPipelinedFlushTrigger(t *testing.T) {
@@ -152,4 +153,46 @@ func TestPipelinedFlushBlock(t *testing.T) {
 	blockCh <- struct{}{} // first flush done
 	<-mayFlushStart       // second flush start
 	require.True(t, memdb.OnFlushing())
+}
+
+func TestPipelinedFlushGet(t *testing.T) {
+	blockCh := make(chan struct{})
+	defer close(blockCh)
+	memdb := NewPipelinedMemDB(func(db *MemDB) error {
+		<-blockCh
+		return nil
+	})
+	memdb.GetMemDB().Set([]byte("key"), []byte("value"))
+	for i := 0; i < MinFlushKeys; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		memdb.GetMemDB().Set(key, value)
+	}
+	value, err := memdb.Get([]byte("key"))
+	require.Nil(t, err)
+	require.Equal(t, value, []byte("value"))
+	require.Nil(t, memdb.MayFlush())
+	require.True(t, memdb.OnFlushing())
+
+	// The key is in flushing memdb instead of current mutable memdb.
+	_, err = memdb.GetMemDB().Get([]byte("key"))
+	require.True(t, tikverr.IsErrNotFound(err))
+	// But we still can get the value by PipelinedMemDB.Get.
+	value, err = memdb.Get([]byte("key"))
+	require.Nil(t, err)
+	require.Equal(t, value, []byte("value"))
+
+	// finish the first flush
+	blockCh <- struct{}{}
+	for i := 0; i < MinFlushKeys; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		memdb.GetMemDB().Set(key, value)
+	}
+	require.Nil(t, memdb.MayFlush())
+	require.True(t, memdb.OnFlushing())
+
+	// now the key is guaranteed to be flushed into stores, though PipelinedMemDB.Get does not see it, snapshot get should get it.
+	_, err = memdb.Get([]byte("key"))
+	require.True(t, tikverr.IsErrNotFound(err))
 }

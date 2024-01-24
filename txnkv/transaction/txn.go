@@ -421,7 +421,11 @@ func (txn *KVTxn) SetPipelined() error {
 		ResolveLock: util.ResolveLockDetail{},
 	}
 	txn.committer.setDetail(commitDetail)
+	// generation is increased when the memdb is flushed to kv store.
+	// note the first generation is 1, which can mark pipelined dml's lock.
+	generation := uint64(0)
 	txn.pipelinedMemDB = unionstore.NewPipelinedMemDB(func(memdb *unionstore.MemDB) (err error) {
+		generation++
 		defer func() {
 			if err != nil {
 				txn.committer.ttlManager.close()
@@ -524,7 +528,7 @@ func (txn *KVTxn) SetPipelined() error {
 			}
 			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		}
-		return txn.committer.pipelinedFlushMutations(bo, mutations)
+		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
 	})
 	return nil
 }
