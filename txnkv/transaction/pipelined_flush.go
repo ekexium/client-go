@@ -442,7 +442,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 			zap.Error(err),
 		)
 	} else {
-		logutil.BgLogger().Info(
+		logutil.Logger(bo.GetCtx()).Info(
 			"[pipelined dml] commit transaction secondaries done",
 			zap.Uint64("resolved regions", resolved.Load()),
 			zap.Uint64("startTS", c.startTS),
