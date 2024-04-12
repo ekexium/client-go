@@ -33,6 +33,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
@@ -301,6 +302,10 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		zap.Int("keys", c.txn.GetMemBuffer().Len()),
 		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))),
 		zap.Uint64("startTS", c.startTS),
+		zap.Duration(
+			"totalFlushWait", c.txn.GetMemBuffer().(*unionstore.PipelinedMemDB).
+				FlushWaitDuration,
+		),
 	)
 	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 	if err != nil {
