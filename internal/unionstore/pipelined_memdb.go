@@ -77,11 +77,11 @@ type flushOption struct {
 	ForceFlushMemSizeThreshold uint64
 }
 
-func newFlushOption() flushOption {
+func newFlushOption(minFlushKeys, minFlushMemSize, forceFlushMemSizeThreshold uint64) flushOption {
 	opt := flushOption{
-		MinFlushKeys:               MinFlushKeys,
-		MinFlushMemSize:            MinFlushMemSize,
-		ForceFlushMemSizeThreshold: ForceFlushMemSizeThreshold,
+		MinFlushKeys:               minFlushKeys,
+		MinFlushMemSize:            minFlushMemSize,
+		ForceFlushMemSizeThreshold: forceFlushMemSizeThreshold,
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushKeys"); err == nil && val != nil {
 		opt.MinFlushKeys = uint64(val.(int))
@@ -98,10 +98,18 @@ func newFlushOption() flushOption {
 type FlushFunc func(uint64, *MemDB) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
-func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
+type PipelinedMemDBOptions struct {
+	Enabled                    bool
+	MinFlushKeys               uint64
+	MinFlushMemSize            uint64
+	ForceFlushMemSizeThreshold uint64
+}
+
+func NewPipelinedMemDB(options PipelinedMemDBOptions, bufferBatchGetter BufferBatchGetter,
+	flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
 	memdb.setSkipMutex(true)
-	flushOpt := newFlushOption()
+	flushOpt := newFlushOption(options.MinFlushKeys, options.MinFlushMemSize, options.ForceFlushMemSizeThreshold)
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),

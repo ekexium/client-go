@@ -31,6 +31,13 @@ func emptyBufferBatchGetter(ctx context.Context, keys [][]byte) (map[string][]by
 	return nil, nil
 }
 
+var MockPipelinedMemDBOptions = PipelinedMemDBOptions{
+	Enabled:                    true,
+	MinFlushKeys:               MinFlushKeys,
+	MinFlushMemSize:            MinFlushMemSize,
+	ForceFlushMemSizeThreshold: ForceFlushMemSizeThreshold,
+}
+
 func TestPipelinedFlushTrigger(t *testing.T) {
 	// because memdb's memory usage is hard to control, we use a cargo-culted value here.
 	avgKeySize := int(MinFlushMemSize/MinFlushKeys) / 3
@@ -38,7 +45,8 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	// block the flush goroutine for checking the flushingMemDB status.
 	blockCh := make(chan struct{})
 	// Will not flush when keys number >= MinFlushKeys and size < MinFlushMemSize
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64,
+		db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -57,7 +65,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 
 	// Will not flush when keys number < MinFlushKeys and size >= MinFlushMemSize
 	avgKeySize = int(MinFlushMemSize/MinFlushKeys) / 2
-	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb = NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -76,7 +84,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	require.Less(t, memdb.memDB.Mem(), ForceFlushMemSizeThreshold)
 
 	// Flush when keys number >= MinFlushKeys and mem size >= MinFlushMemSize
-	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb = NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -105,7 +113,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 
 func TestPipelinedFlushSkip(t *testing.T) {
 	blockCh := make(chan struct{})
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -143,7 +151,7 @@ func TestPipelinedFlushSkip(t *testing.T) {
 
 func TestPipelinedFlushBlock(t *testing.T) {
 	blockCh := make(chan struct{})
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -189,7 +197,7 @@ func TestPipelinedFlushBlock(t *testing.T) {
 
 func TestPipelinedFlushGet(t *testing.T) {
 	blockCh := make(chan struct{})
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
@@ -235,7 +243,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 }
 
 func TestPipelinedFlushSize(t *testing.T) {
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		return nil
 	})
 	size := 0
@@ -280,7 +288,7 @@ func TestPipelinedFlushSize(t *testing.T) {
 
 func TestPipelinedFlushGeneration(t *testing.T) {
 	generationCh := make(chan uint64)
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(generation uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(generation uint64, db *MemDB) error {
 		generationCh <- generation
 		return nil
 	})
@@ -305,7 +313,7 @@ func TestErrorIterator(t *testing.T) {
 		t.Fail()
 	}
 
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		return nil
 	})
 	iteratorToErr(memdb.SnapshotIter(nil, nil))
@@ -314,7 +322,7 @@ func TestErrorIterator(t *testing.T) {
 
 func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	util.EnableFailpoints()
-	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
 	memdb.Set([]byte("key"), []byte("value"))
 	flushed, err := memdb.Flush(false)
 	require.Nil(t, err)
@@ -323,7 +331,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	// can flush even only 1 key
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(1)`))
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
-	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb = NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
 	memdb.Set([]byte("key"), []byte("value"))
 	flushed, err = memdb.Flush(false)
 	require.Nil(t, err)
@@ -333,7 +341,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	// need 2 keys to flush
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
-	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb = NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
 	memdb.Set([]byte("key"), []byte("value"))
 	flushed, err = memdb.Flush(false)
 	require.Nil(t, err)
@@ -344,7 +352,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBForceFlushSizeThreshold", `return(2)`))
-	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb = NewPipelinedMemDB(MockPipelinedMemDBOptions, emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
 	memdb.Set([]byte("key"), []byte("value"))
 	flushed, err = memdb.Flush(false)
 	require.Nil(t, err)
@@ -361,7 +369,7 @@ func TestMemBufferBatchGetCache(t *testing.T) {
 	flushDone := make(chan struct{})
 	var remoteMutex sync.RWMutex
 	remoteBuffer := make(map[string][]byte, 16)
-	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
+	pipelinedMemdb := NewPipelinedMemDB(MockPipelinedMemDBOptions, func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
 		remoteMutex.RLock()
 		defer remoteMutex.RUnlock()
 		m := make(map[string][]byte, len(keys))

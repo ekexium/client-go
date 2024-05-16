@@ -56,6 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -919,9 +920,14 @@ func WithStartTS(startTS uint64) TxnOption {
 }
 
 // WithPipelinedMemDB creates transaction with pipelined memdb.
-func WithPipelinedMemDB() TxnOption {
+func WithPipelinedMemDB(minFlushKeys, minFlushMemSize, forceFlushMemSizeThreshold uint64) TxnOption {
 	return func(st *transaction.TxnOptions) {
-		st.PipelinedMemDB = true
+		st.PipelinedMemDB = unionstore.PipelinedMemDBOptions{
+			Enabled:                    true,
+			MinFlushKeys:               minFlushKeys,
+			MinFlushMemSize:            minFlushMemSize,
+			ForceFlushMemSizeThreshold: forceFlushMemSizeThreshold,
+		}
 	}
 }
 

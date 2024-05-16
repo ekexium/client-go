@@ -57,3 +57,6 @@ type MemBuffer = unionstore.MemBuffer
 
 // MemDBCheckpoint is the checkpoint of memory DB.
 type MemDBCheckpoint = unionstore.MemDBCheckpoint
+
+// PipelinedMemDBOptions is the options for creating a PipelinedMemDB.
+type PipelinedMemDBOptions = unionstore.PipelinedMemDBOptions

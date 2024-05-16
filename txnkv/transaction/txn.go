@@ -114,7 +114,7 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 type TxnOptions struct {
 	TxnScope       string
 	StartTS        *uint64
-	PipelinedMemDB bool
+	PipelinedMemDB unionstore.PipelinedMemDBOptions
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -185,11 +185,11 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		RequestSource:     snapshot.RequestSource,
 	}
-	if !options.PipelinedMemDB {
+	if !options.PipelinedMemDB.Enabled {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDBWithContext(), snapshot)
 		return newTiKVTxn, nil
 	}
-	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
+	if err := newTiKVTxn.InitPipelinedMemDB(options.PipelinedMemDB); err != nil {
 		return nil, err
 	}
 	return newTiKVTxn, nil
@@ -436,7 +436,7 @@ func (txn *KVTxn) IsPipelined() bool {
 	return txn.isPipelined
 }
 
-func (txn *KVTxn) InitPipelinedMemDB() error {
+func (txn *KVTxn) InitPipelinedMemDB(options unionstore.PipelinedMemDBOptions) error {
 	if txn.committer != nil {
 		return errors.New("pipelined memdb should be set before the transaction is committed")
 	}
@@ -464,7 +464,8 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	// generation is increased when the memdb is flushed to kv store.
 	// note the first generation is 1, which can mark pipelined dml's lock.
 	flushedKeys, flushedSize := 0, 0
-	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	pipelinedMemDB := unionstore.NewPipelinedMemDB(options, func(ctx context.Context,
+		keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
