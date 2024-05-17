@@ -38,13 +38,14 @@ type PipelinedMemDB struct {
 	// Like MemDB, this RWMutex only used to ensure memdbSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
-	onFlushing              atomic.Bool
-	errCh                   chan error
-	flushFunc               FlushFunc
-	bufferBatchGetter       BufferBatchGetter
-	memDB                   *MemDB
-	flushingMemDB           *MemDB // the flushingMemDB is not wrapped by a mutex, because there is no data race in it.
-	len, size               int    // len and size records the total flushed and onflushing memdb.
+	onFlushing        atomic.Bool
+	errCh             chan error
+	flushFunc         FlushFunc
+	bufferBatchGetter BufferBatchGetter
+	memDB             MemDBInterface
+	flushingMemDB     MemDBInterface // the flushingMemDB is not wrapped by a mutex,
+	// because there is no data race in it.
+	len, size               int // len and size records the total flushed and onflushing memdb.
 	generation              uint64
 	entryLimit, bufferLimit uint64
 	flushOption             flushOption
@@ -107,8 +108,8 @@ type PipelinedMemDBOptions struct {
 
 func NewPipelinedMemDB(options PipelinedMemDBOptions, bufferBatchGetter BufferBatchGetter,
 	flushFunc FlushFunc) *PipelinedMemDB {
-	memdb := newMemDB()
-	memdb.setSkipMutex(true)
+	memdb := NewHashMapDB()
+	memdb.SetSkipMutex(true)
 	flushOpt := newFlushOption(options.MinFlushKeys, options.MinFlushMemSize, options.ForceFlushMemSizeThreshold)
 	return &PipelinedMemDB{
 		memDB:             memdb,
@@ -293,7 +294,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	// invalidate the batch get cache whether the flush is really triggered.
 	p.batchGetCache = nil
 
-	if len(p.memDB.stages) > 0 {
+	if p.memDB.StageLen() > 0 {
 		return false, errors.New("there are stages unreleased when Flush is called")
 	}
 
@@ -315,14 +316,28 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.size += p.flushingMemDB.Size()
 	p.memDB = newMemDB()
 	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
-	p.memDB.setSkipMutex(true)
+	p.memDB.SetSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
 		util.EvalFailpoint("beforePipelinedFlush")
 		metrics.TiKVPipelinedFlushLenHistogram.Observe(float64(p.flushingMemDB.Len()))
 		metrics.TiKVPipelinedFlushSizeHistogram.Observe(float64(p.flushingMemDB.Size()))
 		flushStart := time.Now()
-		err := p.flushFunc(generation, p.flushingMemDB)
+		var dummyDB *MemDB
+		switch p.flushingMemDB.(type) {
+		case *MemDB:
+			dummyDB = p.flushingMemDB.(*MemDB)
+		case *HashMapDB:
+			dummyDB = newMemDB()
+			hashmapDB := p.flushingMemDB.(*HashMapDB)
+			for key, value := range hashmapDB.data {
+				dummyDB.Set([]byte(key), value)
+			}
+			if p.flushingMemDB.StageLen() > 0 {
+				panic("there are stages unreleased when Flush is called for hashmapDB")
+			}
+		}
+		err := p.flushFunc(generation, dummyDB)
 		metrics.TiKVPipelinedFlushDuration.Observe(time.Since(flushStart).Seconds())
 		p.onFlushing.Store(false)
 		// Send the error to errCh after onFlushing status is set to false.

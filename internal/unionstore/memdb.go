@@ -62,6 +62,30 @@ func (h MemKeyHandle) toAddr() memdbArenaAddr {
 	return memdbArenaAddr{idx: uint32(h.idx), off: h.off}
 }
 
+type MemDBInterface interface {
+	Dirty() bool
+	Get(k []byte) ([]byte, error)
+	GetFlags(k []byte) (kv.KeyFlags, error)
+	UpdateFlags(k []byte, ops ...kv.FlagsOp)
+	Set(k []byte, v []byte) error
+	SetWithFlags(k []byte, v []byte, ops ...kv.FlagsOp) error
+	Delete(k []byte) error
+	DeleteWithFlags(k []byte, ops ...kv.FlagsOp) error
+	Len() int
+	Size() int
+	SetEntrySizeLimit(uint64, uint64)
+	SetMemoryFootprintChangeHook(func(uint64))
+	Mem() uint64
+	Staging() int
+	Release(int)
+	Cleanup(int)
+	StageLen() uint
+	SetSkipMutex(bool)
+}
+
+var _ MemDBInterface = &MemDB{}
+var _ MemDBInterface = &HashMapDB{}
+
 // MemDB is rollbackable Red-Black Tree optimized for TiDB's transaction states buffer use scenario.
 // You can think MemDB is a combination of two separate tree map, one for key => value and another for key => keyFlags.
 //
@@ -895,6 +919,10 @@ func (db *MemDB) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	db.bufferSizeLimit = bufferLimit
 }
 
-func (db *MemDB) setSkipMutex(skip bool) {
+func (db *MemDB) SetSkipMutex(skip bool) {
 	db.skipMutex = skip
+}
+
+func (db *MemDB) StageLen() uint {
+	return uint(len(db.stages))
 }
