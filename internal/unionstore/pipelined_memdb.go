@@ -314,7 +314,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.flushingMemDB = p.memDB
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
-	p.memDB = newMemDB()
+	p.memDB = NewHashMapDB()
 	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
 	p.memDB.SetSkipMutex(true)
 	p.generation++
