@@ -111,11 +111,11 @@ func (db *HashMapDB) Size() int {
 		db.mutex.RLock()
 		defer db.mutex.RUnlock()
 	}
-	size := 0
+	// size := 0
 	// for _, v := range db.data {
 	// 	size += len(v)
 	// }
-	return size
+	return db.Len()
 }
 
 func (db *HashMapDB) SetEntrySizeLimit(entrySizeLimit, bufferSizeLimit uint64) {
