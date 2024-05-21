@@ -59,6 +59,7 @@ type PipelinedMemDB struct {
 
 	// metrics
 	flushWaitDuration time.Duration
+	dumpDuration      time.Duration
 }
 
 const (
@@ -322,7 +323,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		util.EvalFailpoint("beforePipelinedFlush")
 		metrics.TiKVPipelinedFlushLenHistogram.Observe(float64(p.flushingMemDB.Len()))
 		metrics.TiKVPipelinedFlushSizeHistogram.Observe(float64(p.flushingMemDB.Size()))
-		flushStart := time.Now()
+		dumpStartTime := time.Now()
 		var dummyDB *MemDB
 		switch p.flushingMemDB.(type) {
 		case *MemDB:
@@ -337,6 +338,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 				panic("there are stages unreleased when Flush is called for hashmapDB")
 			}
 		}
+		flushStart := time.Now()
+		p.dumpDuration += flushStart.Sub(dumpStartTime)
 		err := p.flushFunc(generation, dummyDB)
 		metrics.TiKVPipelinedFlushDuration.Observe(time.Since(flushStart).Seconds())
 		p.onFlushing.Store(false)

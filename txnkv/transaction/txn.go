@@ -855,6 +855,7 @@ type TxnInfo struct {
 	ErrMsg              string `json:"error,omitempty"`
 	Pipelined           bool   `json:"pipelined"`
 	FlushWaitMs         int64  `json:"flush_wait_ms"`
+	DumpMs              int64  `json:"dump_ms"`
 }
 
 func (txn *KVTxn) onCommitted(err error) {
@@ -878,6 +879,7 @@ func (txn *KVTxn) onCommitted(err error) {
 			OnePCFallback:       txn.committer.hasTriedOnePC && !isOnePC,
 			Pipelined:           txn.IsPipelined(),
 			FlushWaitMs:         txn.GetMemBuffer().GetFlushMetrics().WaitDuration.Milliseconds(),
+			DumpMs:              txn.GetMemBuffer().GetFlushMetrics().DumpDuration.Milliseconds(),
 		}
 		if err != nil {
 			info.ErrMsg = err.Error()
