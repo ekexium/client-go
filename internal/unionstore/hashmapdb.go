@@ -70,16 +70,18 @@ func (db *HashMapDB) Set(k []byte, v []byte) error {
 	return db.SetWithFlags(k, v)
 }
 
-func (db *HashMapDB) SetWithFlags(k []byte, v []byte, ops ...kv.FlagsOp) error {
+func (db *HashMapDB) SetWithFlags(k []byte, _v []byte, ops ...kv.FlagsOp) error {
+	value := make([]byte, len(_v))
+	copy(value, _v)
 	if !db.skipMutex {
 		db.mutex.Lock()
 		defer db.mutex.Unlock()
 	}
-	if uint64(len(k)+len(v)) > db.entrySizeLimit {
+	if uint64(len(k)+len(value)) > db.entrySizeLimit {
 		return errors.New("entry size exceeds limit")
 	}
 	key := string(k)
-	db.Data[key] = v
+	db.Data[key] = value
 	flags := db.Flags[key]
 	flags = kv.ApplyFlagsOps(flags, ops...)
 	db.Flags[key] = flags
