@@ -1634,8 +1634,8 @@ func sortMutations(m *PlainMutations) {
 		}
 	}
 
-	sort.SliceStable(muts, func(i, j int) bool {
-		return string(muts[i].key) < string(muts[j].key)
+	slices.SortStableFunc(muts, func(i, j mutation) int {
+		return bytes.Compare(i.key, j.key)
 	})
 
 	for i := range muts {
@@ -1649,10 +1649,12 @@ func sortMutations(m *PlainMutations) {
 func (txn *KVTxn) collectMutationsFromHashMapDB(
 	hashmapDB *unionstore.HashMapDB,
 ) CommitterMutations {
+	dumpStart := time.Now()
+	defer func() {
+		txn.GetMemBuffer().(*unionstore.PipelinedMemDB).DumpDuration += time.Since(dumpStart)
+	}()
 	mutations := NewPlainMutations(hashmapDB.Len())
 	// TODO: update bounds, find max and min key in hashmapDB
-
-	// TODO: collect mutations and flags, and sort them
 
 	// FIXME: cover the case when there flag but no value
 	for key, value := range hashmapDB.Data {
@@ -1701,6 +1703,14 @@ func (txn *KVTxn) collectMutationsFromHashMapDB(
 					}
 				}
 			}
+		}
+
+		if len(txn.committer.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+			pk := keyBytes
+			txn.committer.primaryKey = make([]byte, len(pk))
+			// copy the primary key to avoid reference to the memory arena.
+			copy(txn.committer.primaryKey, pk)
+			txn.committer.pipelinedCommitInfo.primaryOp = op
 		}
 		mutations.flags = append(mutations.flags, makeMutationFlags(false,
 			flags.HasAssertExist(), flags.HasAssertNotExist(), false))

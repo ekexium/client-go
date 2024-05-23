@@ -59,7 +59,7 @@ type PipelinedMemDB struct {
 
 	// metrics
 	flushWaitDuration time.Duration
-	dumpDuration      time.Duration
+	DumpDuration      time.Duration
 }
 
 const (
@@ -323,24 +323,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		util.EvalFailpoint("beforePipelinedFlush")
 		metrics.TiKVPipelinedFlushLenHistogram.Observe(float64(p.flushingMemDB.Len()))
 		metrics.TiKVPipelinedFlushSizeHistogram.Observe(float64(p.flushingMemDB.Size()))
-		dumpStartTime := time.Now()
-		var dummyDB *MemDB
-		switch p.flushingMemDB.(type) {
-		case *MemDB:
-			dummyDB = p.flushingMemDB.(*MemDB)
-		case *HashMapDB:
-			dummyDB = newMemDB()
-			hashmapDB := p.flushingMemDB.(*HashMapDB)
-			for key, value := range hashmapDB.Data {
-				dummyDB.Set([]byte(key), value)
-			}
-			if p.flushingMemDB.StageLen() > 0 {
-				panic("there are stages unreleased when Flush is called for hashmapDB")
-			}
-		}
 		flushStart := time.Now()
-		p.dumpDuration += flushStart.Sub(dumpStartTime)
-		err := p.flushFunc(generation, dummyDB)
+		err := p.flushFunc(generation, p.flushingMemDB)
 		metrics.TiKVPipelinedFlushDuration.Observe(time.Since(flushStart).Seconds())
 		p.onFlushing.Store(false)
 		// Send the error to errCh after onFlushing status is set to false.
@@ -549,6 +533,6 @@ func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
 	return FlushMetrics{
 		WaitDuration: p.flushWaitDuration,
-		DumpDuration: p.dumpDuration,
+		DumpDuration: p.DumpDuration,
 	}
 }
