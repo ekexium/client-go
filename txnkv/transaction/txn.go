@@ -467,7 +467,7 @@ func (txn *KVTxn) InitPipelinedMemDB(options unionstore.PipelinedMemDBOptions) e
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(options, func(ctx context.Context,
 		keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
-	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
+	}, func(generation uint64, memdb unionstore.MemDBInterface) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
 		}
@@ -491,97 +491,26 @@ func (txn *KVTxn) InitPipelinedMemDB(options unionstore.PipelinedMemDBOptions) e
 			)
 		}()
 
-		// The flush function will not be called concurrently.
-		// TODO: set backoffer from upper context.
-		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
-		mutations := newMemBufferMutations(memdb.Len(), memdb)
 		if memdb.Len() == 0 {
 			return nil
 		}
-		// update bounds
-		{
-			var it unionstore.Iterator
-			// lower bound
-			it = memdb.IterWithFlags(nil, nil)
-			if !it.Valid() {
-				return errors.New("invalid iterator")
-			}
-			startKey := it.Key()
-			if len(txn.committer.pipelinedCommitInfo.pipelinedStart) == 0 || bytes.Compare(txn.committer.pipelinedCommitInfo.pipelinedStart, startKey) > 0 {
-				txn.committer.pipelinedCommitInfo.pipelinedStart = make([]byte, len(startKey))
-				copy(txn.committer.pipelinedCommitInfo.pipelinedStart, startKey)
-			}
-			it.Close()
-			// upper bound
-			it = memdb.IterReverseWithFlags(nil)
-			if !it.Valid() {
-				return errors.New("invalid iterator")
-			}
-			endKey := it.Key()
-			if len(txn.committer.pipelinedCommitInfo.pipelinedEnd) == 0 || bytes.Compare(txn.committer.pipelinedCommitInfo.pipelinedEnd, endKey) < 0 {
-				txn.committer.pipelinedCommitInfo.pipelinedEnd = make([]byte, len(endKey))
-				copy(txn.committer.pipelinedCommitInfo.pipelinedEnd, endKey)
-			}
-			it.Close()
+
+		// The flush function will not be called concurrently.
+		// TODO: set backoffer from upper context.
+		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
+		var mutations CommitterMutations
+		switch memdb.(type) {
+		case *unionstore.MemDB:
+			mutations, err = txn.collectMutationsFromMemDB(memdb.(*unionstore.MemDB))
+		case *unionstore.HashMapDB:
+			mutations = txn.collectMutationsFromHashMapDB(memdb.(*unionstore.HashMapDB))
+		default:
+			return errors.New("unknown memdb type")
 		}
-		// TODO: reuse initKeysAndMutations
-		for it := memdb.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
-			if err != nil {
-				return err
-			}
-			flags := it.Flags()
-			var value []byte
-			var op kvrpcpb.Op
-
-			if !it.HasValue() {
-				if !flags.HasLocked() {
-					continue
-				}
-				op = kvrpcpb.Op_Lock
-			} else {
-				value = it.Value()
-				if len(value) > 0 {
-					op = kvrpcpb.Op_Put
-					if flags.HasPresumeKeyNotExists() {
-						op = kvrpcpb.Op_Insert
-					}
-				} else {
-					if flags.HasPresumeKeyNotExists() {
-						// delete-your-writes keys in optimistic txn need check not exists in prewrite-phase
-						// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
-						op = kvrpcpb.Op_CheckNotExists
-					} else {
-						if flags.HasNewlyInserted() {
-							// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
-							// other deletes for example the secondary index delete.
-							// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
-							// the logic is same as the pessimistic mode.
-							if flags.HasLocked() {
-								op = kvrpcpb.Op_Lock
-							} else {
-								continue
-							}
-						} else {
-							op = kvrpcpb.Op_Del
-						}
-					}
-				}
-			}
-
-			if len(txn.committer.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
-				pk := it.Key()
-				txn.committer.primaryKey = make([]byte, len(pk))
-				// copy the primary key to avoid reference to the memory arena.
-				copy(txn.committer.primaryKey, pk)
-				txn.committer.pipelinedCommitInfo.primaryOp = op
-			}
-
-			mustExist, mustNotExist := flags.HasAssertExist(), flags.HasAssertNotExist()
-			if txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
-				mustExist, mustNotExist = false, false
-			}
-			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
+		if err != nil {
+			return err
 		}
+
 		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
 	})
 	txn.committer.priority = txn.priority.ToPB()
@@ -1685,4 +1614,216 @@ func (txn *KVTxn) SetRequestSourceType(tp string) {
 // SetExplicitRequestSourceType sets the explicit type of the request source.
 func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 	txn.RequestSource.SetExplicitRequestSourceType(tp)
+}
+
+type mutation struct {
+	op    kvrpcpb.Op
+	key   []byte
+	value []byte
+	flag  CommitterMutationFlags
+}
+
+func sortMutations(m *PlainMutations) {
+	muts := make([]mutation, len(m.keys))
+	for i := range m.keys {
+		muts[i] = mutation{
+			op:    m.ops[i],
+			key:   m.keys[i],
+			value: m.values[i],
+			flag:  m.flags[i],
+		}
+	}
+
+	sort.SliceStable(muts, func(i, j int) bool {
+		return string(muts[i].key) < string(muts[j].key)
+	})
+
+	for i := range muts {
+		m.ops[i] = muts[i].op
+		m.keys[i] = muts[i].key
+		m.values[i] = muts[i].value
+		m.flags[i] = muts[i].flag
+	}
+}
+
+func (txn *KVTxn) collectMutationsFromHashMapDB(
+	hashmapDB *unionstore.HashMapDB,
+) CommitterMutations {
+	mutations := NewPlainMutations(hashmapDB.Len())
+	// TODO: update bounds, find max and min key in hashmapDB
+
+	// TODO: collect mutations and flags, and sort them
+
+	// FIXME: cover the case when there flag but no value
+	for key, value := range hashmapDB.Data {
+		keyBytes := []byte(key)
+
+		// Collect mutations and flags
+		mutations.keys = append(mutations.keys, keyBytes)
+		if value != nil {
+			mutations.values = append(mutations.values, value)
+		} else {
+			mutations.values = append(mutations.values, nil)
+		}
+
+		// Assuming Op needs to be constructed. Adjust according to your actual Op type.
+		var op kvrpcpb.Op
+		flags := hashmapDB.Flags[key]
+		if value == nil {
+			if !flags.HasLocked() {
+				continue
+			}
+			op = kvrpcpb.Op_Lock
+		} else {
+			if len(value) > 0 {
+				op = kvrpcpb.Op_Put
+				if flags.HasPresumeKeyNotExists() {
+					op = kvrpcpb.Op_Insert
+				}
+			} else {
+				if flags.HasPresumeKeyNotExists() {
+					// delete-your-writes keys in optimistic txn need check not exists in prewrite-phase
+					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
+					op = kvrpcpb.Op_CheckNotExists
+				} else {
+					if flags.HasNewlyInserted() {
+						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
+						// other deletes for example the secondary index delete.
+						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
+						// the logic is same as the pessimistic mode.
+						if flags.HasLocked() {
+							op = kvrpcpb.Op_Lock
+						} else {
+							continue
+						}
+					} else {
+						op = kvrpcpb.Op_Del
+					}
+				}
+			}
+		}
+		mutations.flags = append(mutations.flags, makeMutationFlags(false,
+			flags.HasAssertExist(), flags.HasAssertNotExist(), false))
+		mutations.ops = append(mutations.ops, op)
+	}
+
+	sortMutations(&mutations)
+
+	// TODO: update bounds
+	startKey := mutations.keys[0]
+	endKey := mutations.keys[len(mutations.keys)-1]
+	if len(txn.committer.pipelinedCommitInfo.pipelinedStart) == 0 || bytes.Compare(
+		txn.committer.pipelinedCommitInfo.pipelinedStart,
+		startKey,
+	) > 0 {
+		txn.committer.pipelinedCommitInfo.pipelinedStart = make([]byte, len(startKey))
+		copy(txn.committer.pipelinedCommitInfo.pipelinedStart, startKey)
+	}
+	if len(txn.committer.pipelinedCommitInfo.pipelinedEnd) == 0 || bytes.Compare(
+		txn.committer.pipelinedCommitInfo.pipelinedEnd,
+		endKey,
+	) < 0 {
+		txn.committer.pipelinedCommitInfo.pipelinedEnd = make([]byte, len(endKey))
+		copy(txn.committer.pipelinedCommitInfo.pipelinedEnd, endKey)
+	}
+
+	return &mutations
+}
+
+func (txn *KVTxn) collectMutationsFromMemDB(memdb *unionstore.MemDB) (CommitterMutations, error) {
+	mutations := newMemBufferMutations(memdb.Len(), memdb)
+	// update bounds
+	{
+		var it unionstore.Iterator
+		// lower bound
+		it = memdb.IterWithFlags(nil, nil)
+		if !it.Valid() {
+			return nil, errors.New("invalid iterator")
+		}
+		startKey := it.Key()
+		if len(txn.committer.pipelinedCommitInfo.pipelinedStart) == 0 || bytes.Compare(
+			txn.committer.pipelinedCommitInfo.pipelinedStart,
+			startKey,
+		) > 0 {
+			txn.committer.pipelinedCommitInfo.pipelinedStart = make([]byte, len(startKey))
+			copy(txn.committer.pipelinedCommitInfo.pipelinedStart, startKey)
+		}
+		it.Close()
+		// upper bound
+		it = memdb.IterReverseWithFlags(nil)
+		if !it.Valid() {
+			return nil, errors.New("invalid iterator")
+		}
+		endKey := it.Key()
+		if len(txn.committer.pipelinedCommitInfo.pipelinedEnd) == 0 || bytes.Compare(
+			txn.committer.pipelinedCommitInfo.pipelinedEnd,
+			endKey,
+		) < 0 {
+			txn.committer.pipelinedCommitInfo.pipelinedEnd = make([]byte, len(endKey))
+			copy(txn.committer.pipelinedCommitInfo.pipelinedEnd, endKey)
+		}
+		it.Close()
+	}
+
+	// collect mutations
+	// TODO: reuse initKeysAndMutations
+	var err error
+	for it := memdb.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
+		if err != nil {
+			return nil, err
+		}
+		flags := it.Flags()
+		var value []byte
+		var op kvrpcpb.Op
+
+		if !it.HasValue() {
+			if !flags.HasLocked() {
+				continue
+			}
+			op = kvrpcpb.Op_Lock
+		} else {
+			value = it.Value()
+			if len(value) > 0 {
+				op = kvrpcpb.Op_Put
+				if flags.HasPresumeKeyNotExists() {
+					op = kvrpcpb.Op_Insert
+				}
+			} else {
+				if flags.HasPresumeKeyNotExists() {
+					// delete-your-writes keys in optimistic txn need check not exists in prewrite-phase
+					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
+					op = kvrpcpb.Op_CheckNotExists
+				} else {
+					if flags.HasNewlyInserted() {
+						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
+						// other deletes for example the secondary index delete.
+						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
+						// the logic is same as the pessimistic mode.
+						if flags.HasLocked() {
+							op = kvrpcpb.Op_Lock
+						} else {
+							continue
+						}
+					} else {
+						op = kvrpcpb.Op_Del
+					}
+				}
+			}
+		}
+
+		if len(txn.committer.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
+			pk := it.Key()
+			txn.committer.primaryKey = make([]byte, len(pk))
+			// copy the primary key to avoid reference to the memory arena.
+			copy(txn.committer.primaryKey, pk)
+			txn.committer.pipelinedCommitInfo.primaryOp = op
+		}
+
+		mustExist, mustNotExist := flags.HasAssertExist(), flags.HasAssertNotExist()
+		if txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
+			mustExist, mustNotExist = false, false
+		}
+		mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
+	}
+	return mutations, nil
 }

@@ -97,7 +97,7 @@ func newFlushOption(minFlushKeys, minFlushMemSize, forceFlushMemSizeThreshold ui
 	return opt
 }
 
-type FlushFunc func(uint64, *MemDB) error
+type FlushFunc func(uint64, MemDBInterface) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
 type PipelinedMemDBOptions struct {
@@ -331,7 +331,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		case *HashMapDB:
 			dummyDB = newMemDB()
 			hashmapDB := p.flushingMemDB.(*HashMapDB)
-			for key, value := range hashmapDB.data {
+			for key, value := range hashmapDB.Data {
 				dummyDB.Set([]byte(key), value)
 			}
 			if p.flushingMemDB.StageLen() > 0 {

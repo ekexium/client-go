@@ -9,8 +9,8 @@ import (
 )
 
 type HashMapDB struct {
-	data                      map[string][]byte
-	flags                     map[string]kv.KeyFlags
+	Data                      map[string][]byte
+	Flags                     map[string]kv.KeyFlags
 	mutex                     sync.RWMutex
 	dirty                     bool
 	entrySizeLimit            uint64
@@ -21,8 +21,8 @@ type HashMapDB struct {
 
 func NewHashMapDB() *HashMapDB {
 	return &HashMapDB{
-		data:  make(map[string][]byte),
-		flags: make(map[string]kv.KeyFlags),
+		Data:  make(map[string][]byte),
+		Flags: make(map[string]kv.KeyFlags),
 	}
 }
 
@@ -35,7 +35,7 @@ func (db *HashMapDB) Get(k []byte) ([]byte, error) {
 		db.mutex.RLock()
 		defer db.mutex.RUnlock()
 	}
-	value, ok := db.data[string(k)]
+	value, ok := db.Data[string(k)]
 	if !ok {
 		return nil, tikverr.ErrNotExist
 	}
@@ -47,7 +47,7 @@ func (db *HashMapDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 		db.mutex.RLock()
 		defer db.mutex.RUnlock()
 	}
-	flags, ok := db.flags[string(k)]
+	flags, ok := db.Flags[string(k)]
 	if !ok {
 		return 0, tikverr.ErrNotExist
 	}
@@ -60,9 +60,9 @@ func (db *HashMapDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
 		defer db.mutex.Unlock()
 	}
 	key := string(k)
-	flags, _ := db.flags[key]
+	flags, _ := db.Flags[key]
 	flags = kv.ApplyFlagsOps(flags, ops...)
-	db.flags[key] = flags
+	db.Flags[key] = flags
 	db.dirty = true
 }
 
@@ -79,10 +79,10 @@ func (db *HashMapDB) SetWithFlags(k []byte, v []byte, ops ...kv.FlagsOp) error {
 		return errors.New("entry size exceeds limit")
 	}
 	key := string(k)
-	db.data[key] = v
-	flags := db.flags[key]
+	db.Data[key] = v
+	flags := db.Flags[key]
 	flags = kv.ApplyFlagsOps(flags, ops...)
-	db.flags[key] = flags
+	db.Flags[key] = flags
 	db.dirty = true
 	if db.memoryFootprintChangeHook != nil {
 		db.memoryFootprintChangeHook(db.Mem())
@@ -103,7 +103,7 @@ func (db *HashMapDB) Len() int {
 		db.mutex.RLock()
 		defer db.mutex.RUnlock()
 	}
-	return len(db.data)
+	return len(db.Data)
 }
 
 func (db *HashMapDB) Size() int {
