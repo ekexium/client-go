@@ -399,6 +399,11 @@ type ResolveLocksOptions struct {
 	Locks                    []*Lock
 	Lite                     bool
 	ForRead                  bool
+	// SyncResolve forces synchronous lock resolution even when ForRead is true.
+	// When ForRead is true and SyncResolve is false (default), expired locks are
+	// resolved asynchronously in goroutines. Setting SyncResolve to true makes
+	// the resolution synchronous while keeping other ForRead semantics (read-through).
+	SyncResolve              bool
 	Detail                   *util.ResolveLockDetail
 	PessimisticRegionResolve bool
 }
@@ -487,7 +492,7 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 }
 
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (result ResolveLockResult, err error) {
-	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve
+	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve, syncResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve, opts.SyncResolve
 	util.EvalFailpoint("tryResolveLock")
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
@@ -579,7 +584,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				return status, nil
 			}
 			// status of async-commit transaction is determined by resolveAsyncCommitLock.
-			status, err = lr.resolveAsyncCommitLock(bo, l, status, forRead)
+			status, err = lr.resolveAsyncCommitLock(bo, l, status, forRead && !syncResolve)
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {
 				status, err = resolve(l, true)
 			}
@@ -598,7 +603,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				err = lr.resolvePessimisticLock(bo, l, false, nil)
 			}
 		} else {
-			if forRead {
+			if forRead && !syncResolve {
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
 				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
 				go func() {
